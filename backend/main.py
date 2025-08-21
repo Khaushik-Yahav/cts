@@ -1,14 +1,16 @@
 from __future__ import annotations
 import os, shutil
 from typing import Optional, Literal
-from fastapi import FastAPI, UploadFile, File, HTTPException
-from pydantic import BaseModel
+from fastapi import FastAPI, UploadFile, File, HTTPException, Depends
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, EmailStr
 from dotenv import load_dotenv
 from sqlalchemy import select
 from backend.rag.qa import answer_question
 from backend.rag.ingest import ingest_pdfs
 from backend.db import db_session, engine
-from backend.models import Base, ChatSession, Message
+from backend.models import Base, ChatSession, Message, User
+from backend.auth import get_current_user, AuthUser, hash_password, verify_password, create_access_token
 
 load_dotenv()
 
@@ -19,10 +21,18 @@ app = FastAPI(
     redoc_url=None if disable_swagger else "/redoc",
 )
 
+# CORS for your frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=os.getenv("CORS_ALLOW_ORIGINS", "*").split(","),
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # --- DB bootstrap ---
 def init_db():
     Base.metadata.create_all(bind=engine)
-
 init_db()
 
 # --- Schemas ---
@@ -30,10 +40,10 @@ Provider = Literal["groq", "openai", "auto"]
 
 class AskBody(BaseModel):
     question: str
-    session_id: Optional[str] = None    # pass null to create a new chat implicitly
+    session_id: Optional[str] = None
     top_k: int = 4
-    provider: Provider = "auto"         # NEW: "groq" | "openai" | "auto"
-    model: Optional[str] = None         # NEW: override model per request
+    provider: Provider = "auto"       # "groq" | "openai" | "auto"
+    model: Optional[str] = None       # override model per request
 
 class NewSessionBody(BaseModel):
     title: Optional[str] = None
@@ -41,13 +51,47 @@ class NewSessionBody(BaseModel):
 class RenameSessionBody(BaseModel):
     title: str
 
+class RegisterBody(BaseModel):
+    email: EmailStr
+    password: str
+
+class LoginBody(BaseModel):
+    email: EmailStr
+    password: str
+
 @app.get("/health")
 def health():
     return {"ok": True}
 
+# ---------- Auth ----------
+@app.post("/auth/register")
+def register(body: RegisterBody):
+    with db_session() as db:
+        exists = db.execute(select(User).where(User.email == body.email)).scalar_one_or_none()
+        if exists:
+            raise HTTPException(status_code=400, detail="Email already registered")
+        u = User(email=body.email, password_hash=hash_password(body.password))
+        db.add(u)
+        db.flush()
+        token = create_access_token(u.id, u.email)
+        return {"access_token": token, "token_type": "bearer"}
+
+@app.post("/auth/login")
+def login(body: LoginBody):
+    with db_session() as db:
+        u = db.execute(select(User).where(User.email == body.email)).scalar_one_or_none()
+        if not u or not verify_password(body.password, u.password_hash):
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+        token = create_access_token(u.id, u.email)
+        return {"access_token": token, "token_type": "bearer"}
+
 # ---------- RAG ingestion / upload ----------
 @app.post("/ingest")
-async def ingest_endpoint(pdf_dir: str = "data/pdfs", index_dir: str = "data/index"):
+async def ingest_endpoint(
+    pdf_dir: str = "data/pdfs",
+    index_dir: str = "data/index",
+    user: AuthUser = Depends(get_current_user),
+):
     try:
         stats = ingest_pdfs(pdf_dir=pdf_dir, index_dir=index_dir)
         return {"status": "ok", "stats": stats}
@@ -55,13 +99,15 @@ async def ingest_endpoint(pdf_dir: str = "data/pdfs", index_dir: str = "data/ind
         raise HTTPException(status_code=500, detail=f"Ingestion failed: {e}")
 
 @app.post("/upload")
-async def upload_pdf(file: UploadFile = File(...)):
+async def upload_pdf(
+    file: UploadFile = File(...),
+    user: AuthUser = Depends(get_current_user),
+):
     try:
         os.makedirs("data/pdfs", exist_ok=True)
         dest = os.path.join("data/pdfs", file.filename)
         with open(dest, "wb") as f:
             shutil.copyfileobj(file.file, f)
-        # Rebuild index after each upload
         stats = ingest_pdfs(pdf_dir="data/pdfs", index_dir="data/index")
         return {"status": "uploaded", "file": file.filename, "stats": stats}
     except Exception as e:
@@ -69,34 +115,50 @@ async def upload_pdf(file: UploadFile = File(...)):
 
 # ---------- Chat/Q&A ----------
 @app.post("/ask")
-async def ask(body: AskBody):
+async def ask(body: AskBody, user: AuthUser = Depends(get_current_user)):
     """
-    Dynamically choose LLM provider/model per request.
-    If body.session_id is None, a new session is created implicitly and returned.
+    Choose provider/model per request. Creates a session if none provided.
     """
+    # Ensure index exists early
+    if not (os.path.exists("data/index/index.faiss") and os.path.exists("data/index/meta.json")):
+        raise HTTPException(status_code=400, detail="No index found. Upload/ingest PDFs first.")
+
     try:
-        text, citations, effective_session_id = answer_question(
+        effective_session_id = body.session_id
+        if effective_session_id is None:
+            with db_session() as db:
+                s = ChatSession(user_id=user.id, title="New chat")
+                db.add(s)
+                db.flush()
+                effective_session_id = s.id
+        else:
+            with db_session() as db:
+                s = db.get(ChatSession, effective_session_id)
+                if not s or s.user_id != user.id:
+                    raise HTTPException(status_code=404, detail="Session not found")
+
+        text, citations, _ = answer_question(
             question=body.question,
-            session_id=body.session_id,
+            session_id=effective_session_id,
             top_k=body.top_k,
             index_dir="data/index",
             provider=body.provider,
             model_override=body.model,
         )
-        return {
-            "answer": text,
-            "citations": citations,
-            "session_id": effective_session_id,
-        }
+        return {"answer": text, "citations": citations, "session_id": effective_session_id}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Q&A failed: {e}")
 
-# ---------- Sessions (for left sidebar like ChatGPT) ----------
+# ---------- Sessions (left sidebar) ----------
 @app.get("/sessions")
-def list_sessions():
+def list_sessions(user: AuthUser = Depends(get_current_user)):
     with db_session() as db:
         rows = db.execute(
-            select(ChatSession).order_by(ChatSession.updated_at.desc())
+            select(ChatSession)
+            .where(ChatSession.user_id == user.id)
+            .order_by(ChatSession.updated_at.desc())
         ).scalars()
         return [
             {
@@ -109,18 +171,18 @@ def list_sessions():
         ]
 
 @app.post("/sessions")
-def create_session(body: NewSessionBody):
+def create_session(body: NewSessionBody, user: AuthUser = Depends(get_current_user)):
     with db_session() as db:
-        s = ChatSession(title=body.title or "New chat")
+        s = ChatSession(user_id=user.id, title=body.title or "New chat")
         db.add(s)
         db.flush()
         return {"id": s.id, "title": s.title, "created_at": s.created_at, "updated_at": s.updated_at}
 
 @app.get("/sessions/{session_id}")
-def get_session(session_id: str):
+def get_session(session_id: str, user: AuthUser = Depends(get_current_user)):
     with db_session() as db:
         s = db.get(ChatSession, session_id)
-        if not s:
+        if not s or s.user_id != user.id:
             raise HTTPException(status_code=404, detail="Session not found")
         return {
             "id": s.id,
@@ -141,111 +203,19 @@ def get_session(session_id: str):
         }
 
 @app.patch("/sessions/{session_id}")
-def rename_session(session_id: str, body: RenameSessionBody):
+def rename_session(session_id: str, body: RenameSessionBody, user: AuthUser = Depends(get_current_user)):
     with db_session() as db:
         s = db.get(ChatSession, session_id)
-        if not s:
+        if not s or s.user_id != user.id:
             raise HTTPException(status_code=404, detail="Session not found")
         s.title = body.title
         return {"id": s.id, "title": s.title}
 
 @app.delete("/sessions/{session_id}")
-def delete_session(session_id: str):
+def delete_session(session_id: str, user: AuthUser = Depends(get_current_user)):
     with db_session() as db:
         s = db.get(ChatSession, session_id)
-        if not s:
+        if not s or s.user_id != user.id:
             raise HTTPException(status_code=404, detail="Session not found")
         db.delete(s)
         return {"deleted": True}
-
-"""
-import os
-from fastapi import FastAPI, UploadFile, File
-from pydantic import BaseModel
-from dotenv import load_dotenv
-from backend.rag.qa import answer_question
-from backend.rag.ingest import ingest_pdfs
-
-load_dotenv()
-
-app = FastAPI(title="Drug Info RAG API")
-
-class AskBody(BaseModel):
-    question: str
-    session_id: str | None = None
-    top_k: int = 4
-
-@app.get("/health")
-def health():
-    return {"ok": True}
-
-@app.post("/ingest")
-async def ingest_endpoint(pdf_dir: str = "data/pdfs", index_dir: str = "data/index"):
-    stats = ingest_pdfs(pdf_dir=pdf_dir, index_dir=index_dir)
-    return {"status":"ok", "stats": stats}
-
-@app.post("/ask")
-async def ask(body: AskBody):
-    text, citations = answer_question(
-        question=body.question,
-        session_id=body.session_id or "default",
-        top_k=body.top_k,
-        index_dir="data/index"
-    )
-    return {"answer": text, "citations": citations}
-"""
-"""
-import os, shutil
-from fastapi import FastAPI, UploadFile, File, HTTPException
-from pydantic import BaseModel
-from dotenv import load_dotenv
-from backend.rag.qa import answer_question
-from backend.rag.ingest import ingest_pdfs
-
-load_dotenv()
-
-app = FastAPI(title="Drug Info RAG API")
-
-class AskBody(BaseModel):
-    question: str
-    session_id: str | None = None
-    top_k: int = 4
-
-@app.get("/health")
-def health():
-    return {"ok": True}
-
-@app.post("/ingest")
-async def ingest_endpoint(pdf_dir: str = "data/pdfs", index_dir: str = "data/index"):
-    try:
-        stats = ingest_pdfs(pdf_dir=pdf_dir, index_dir=index_dir)
-        return {"status": "ok", "stats": stats}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Ingestion failed: {e}")
-
-@app.post("/upload")
-async def upload_pdf(file: UploadFile = File(...)):
-    try:
-        os.makedirs("data/pdfs", exist_ok=True)
-        dest = os.path.join("data/pdfs", file.filename)
-        with open(dest, "wb") as f:
-            shutil.copyfileobj(file.file, f)
-        # Rebuild index after each upload
-        stats = ingest_pdfs(pdf_dir="data/pdfs", index_dir="data/index")
-        return {"status": "uploaded", "file": file.filename, "stats": stats}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"PDF upload failed: {e}")
-
-@app.post("/ask")
-async def ask(body: AskBody):
-    try:
-        text, citations = answer_question(
-            question=body.question,
-            session_id=body.session_id or "default",
-            top_k=body.top_k,
-            index_dir="data/index"
-        )
-        return {"answer": text, "citations": citations}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Q&A failed: {e}")
-"""

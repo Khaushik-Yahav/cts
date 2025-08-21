@@ -12,5 +12,10 @@ def get_model():
 
 def embed_texts(texts: list[str]) -> np.ndarray:
     model = get_model()
-    vecs = model.encode(texts, normalize_embeddings=True, convert_to_numpy=True, show_progress_bar=False)
+    vecs = model.encode(
+        texts,
+        normalize_embeddings=True,
+        convert_to_numpy=True,
+        show_progress_bar=False,
+    )
     return vecs.astype('float32')
