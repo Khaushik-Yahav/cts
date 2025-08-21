@@ -1,103 +1,3 @@
-"""
-from __future__ import annotations
-from typing import Tuple, List, Dict
-from backend.rag.retrieve import retrieve
-from backend.rag.llm import generate_answer
-
-PROMPT_TEMPLATE = '''You are answering a user question strictly using the CONTEXT.
-If the answer is not in the context, say "I don't know based on the provided documents."
-
-QUESTION:
-{question}
-
-CONTEXT (each item shows [source p.page] headers):
-{context}
-
-Return a concise answer suitable for clinicians and patients. End with citations like:
-[CITATIONS: filename p.X, filename p.Y].
-'''
-
-def _format_context(chunks: List[Dict]) -> str:
-    parts = []
-    for c in chunks:
-        header = f"[{c['source']} p.{c['page']}]"
-        parts.append(header + "\n" + c["text"])
-    return "\n\n".join(parts)
-
-def answer_question(question: str, session_id: str, top_k: int, index_dir: str) -> Tuple[str, List[Dict]]:
-    # 1) Retrieve
-    hits = retrieve(question, index_dir=index_dir, top_k=top_k)
-
-    # 2) Build prompt
-    context = _format_context(hits)
-    prompt = PROMPT_TEMPLATE.format(question=question, context=context)
-
-    # 3) LLM
-    answer = generate_answer(prompt)
-
-    # 4) Citations for API response
-    citations = [{"source": h["source"], "page": h["page"], "score": h["score"], "rank": h["rank"]} for h in hits]
-    return answer, citations
-
-"""
-
-"""
-from __future__ import annotations
-from typing import Tuple, List, Dict
-from backend.rag.retrieve import retrieve
-from backend.rag.llm import generate_answer
-from backend.rag.session_store import add_to_session, get_session_context
-
-PROMPT_TEMPLATE = '''You are answering a user question strictly using the CONTEXT.
-If the answer is not in the context, say "I don't know based on the provided documents."
-
-SESSION CONTEXT (earlier Q&A for reference):
-{session_context}
-
-QUESTION:
-{question}
-
-DOCUMENT CONTEXT (retrieved passages with [source p.page] headers):
-{context}
-
-Return a concise answer suitable for clinicians and patients. 
-End with citations like: [CITATIONS: filename p.X, filename p.Y].
-'''
-
-def _format_context(chunks: List[Dict]) -> str:
-    parts = []
-    for c in chunks:
-        header = f"[{c['source']} p.{c['page']}]"
-        parts.append(header + "\n" + c["text"])
-    return "\n\n".join(parts)
-
-def answer_question(question: str, session_id: str, top_k: int, index_dir: str) -> Tuple[str, List[Dict]]:
-    try:
-        # 1) Retrieve
-        hits = retrieve(question, index_dir=index_dir, top_k=top_k)
-
-        # 2) Build prompt with history
-        session_context = get_session_context(session_id)
-        context = _format_context(hits)
-        prompt = PROMPT_TEMPLATE.format(session_context=session_context, question=question, context=context)
-
-        # 3) LLM
-        answer = generate_answer(prompt)
-
-        # 4) Citations for API response
-        citations = [{"source": h["source"], "page": h["page"], "score": h["score"], "rank": h["rank"]} for h in hits]
-
-        # 5) Save to session log
-        add_to_session(session_id, question, answer, citations)
-
-        return answer, citations
-
-    except FileNotFoundError:
-        return "[Error: No index found. Please ingest PDFs first.]", []
-    except Exception as e:
-        return f"[Unexpected error: {e}]", []
-"""
-
 from __future__ import annotations
 from typing import Tuple, List, Dict, Literal, Optional
 from sqlalchemy import select
@@ -247,3 +147,105 @@ def answer_question(
         sess.updated_at = datetime.utcnow()
 
         return answer, citations, effective_session_id
+
+
+
+"""
+from __future__ import annotations
+from typing import Tuple, List, Dict
+from backend.rag.retrieve import retrieve
+from backend.rag.llm import generate_answer
+
+PROMPT_TEMPLATE = '''You are answering a user question strictly using the CONTEXT.
+If the answer is not in the context, say "I don't know based on the provided documents."
+
+QUESTION:
+{question}
+
+CONTEXT (each item shows [source p.page] headers):
+{context}
+
+Return a concise answer suitable for clinicians and patients. End with citations like:
+[CITATIONS: filename p.X, filename p.Y].
+'''
+
+def _format_context(chunks: List[Dict]) -> str:
+    parts = []
+    for c in chunks:
+        header = f"[{c['source']} p.{c['page']}]"
+        parts.append(header + "\n" + c["text"])
+    return "\n\n".join(parts)
+
+def answer_question(question: str, session_id: str, top_k: int, index_dir: str) -> Tuple[str, List[Dict]]:
+    # 1) Retrieve
+    hits = retrieve(question, index_dir=index_dir, top_k=top_k)
+
+    # 2) Build prompt
+    context = _format_context(hits)
+    prompt = PROMPT_TEMPLATE.format(question=question, context=context)
+
+    # 3) LLM
+    answer = generate_answer(prompt)
+
+    # 4) Citations for API response
+    citations = [{"source": h["source"], "page": h["page"], "score": h["score"], "rank": h["rank"]} for h in hits]
+    return answer, citations
+
+"""
+
+"""
+from __future__ import annotations
+from typing import Tuple, List, Dict
+from backend.rag.retrieve import retrieve
+from backend.rag.llm import generate_answer
+from backend.rag.session_store import add_to_session, get_session_context
+
+PROMPT_TEMPLATE = '''You are answering a user question strictly using the CONTEXT.
+If the answer is not in the context, say "I don't know based on the provided documents."
+
+SESSION CONTEXT (earlier Q&A for reference):
+{session_context}
+
+QUESTION:
+{question}
+
+DOCUMENT CONTEXT (retrieved passages with [source p.page] headers):
+{context}
+
+Return a concise answer suitable for clinicians and patients. 
+End with citations like: [CITATIONS: filename p.X, filename p.Y].
+'''
+
+def _format_context(chunks: List[Dict]) -> str:
+    parts = []
+    for c in chunks:
+        header = f"[{c['source']} p.{c['page']}]"
+        parts.append(header + "\n" + c["text"])
+    return "\n\n".join(parts)
+
+def answer_question(question: str, session_id: str, top_k: int, index_dir: str) -> Tuple[str, List[Dict]]:
+    try:
+        # 1) Retrieve
+        hits = retrieve(question, index_dir=index_dir, top_k=top_k)
+
+        # 2) Build prompt with history
+        session_context = get_session_context(session_id)
+        context = _format_context(hits)
+        prompt = PROMPT_TEMPLATE.format(session_context=session_context, question=question, context=context)
+
+        # 3) LLM
+        answer = generate_answer(prompt)
+
+        # 4) Citations for API response
+        citations = [{"source": h["source"], "page": h["page"], "score": h["score"], "rank": h["rank"]} for h in hits]
+
+        # 5) Save to session log
+        add_to_session(session_id, question, answer, citations)
+
+        return answer, citations
+
+    except FileNotFoundError:
+        return "[Error: No index found. Please ingest PDFs first.]", []
+    except Exception as e:
+        return f"[Unexpected error: {e}]", []
+"""
