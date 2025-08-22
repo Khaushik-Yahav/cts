@@ -1,45 +1,109 @@
 from __future__ import annotations
-import os, fitz, faiss, numpy as np
-from typing import Dict, Any
+import os
+import fitz  # PyMuPDF
+import faiss
+import numpy as np
+from typing import Dict, Any, List
 from backend.rag.utils import clean_text, chunk_text
 from backend.rag.embeddings import embed_texts
 from backend.rag.store import save_index
 
-def extract_pdf_pages(path: str) -> list[dict[str, Any]]:
-    doc = fitz.open(path)
-    out = []
-    for i, page in enumerate(doc, start=1):
-        text = page.get_text("text")
-        out.append({"page": i, "text": text})
-    doc.close()
-    return out
+def extract_pdf_pages(path: str) -> List[Dict[str, Any]]:
+    """Extract text from PDF pages"""
+    try:
+        doc = fitz.open(path)
+        pages = []
+
+        for i, page in enumerate(doc, start=1):
+            text = page.get_text("text")
+            pages.append({"page": i, "text": text})
+
+        doc.close()
+        return pages
+
+    except Exception as e:
+        print(f"Error extracting PDF {path}: {e}")
+        return []
 
 def ingest_pdfs(pdf_dir: str = "data/pdfs", index_dir: str = "data/index") -> Dict[str, Any]:
-    entries = []
-    if not os.path.isdir(pdf_dir):
-        return {"chunks": 0, "message": f"PDF directory not found: {pdf_dir}"}
+    """
+    Process all PDFs in the directory and create/update the search index.
+    Returns statistics about the ingestion process.
+    """
 
-    for fn in os.listdir(pdf_dir):
-        if not fn.lower().endswith(".pdf"):
-            continue
-        full = os.path.join(pdf_dir, fn)
-        pages = extract_pdf_pages(full)
-        for p in pages:
-            cleaned = clean_text(p["text"] or "")
-            if not cleaned:
+    if not os.path.isdir(pdf_dir):
+        return {
+            "chunks": 0, 
+            "message": f"PDF directory not found: {pdf_dir}",
+            "pdf_count": 0,
+            "success": False
+        }
+
+    entries = []
+    pdf_files = [f for f in os.listdir(pdf_dir) if f.lower().endswith(".pdf")]
+
+    if not pdf_files:
+        return {
+            "chunks": 0,
+            "message": "No PDF files found in directory",
+            "pdf_count": 0,
+            "success": False
+        }
+
+    print(f"Processing {len(pdf_files)} PDF files...")
+
+    for filename in pdf_files:
+        full_path = os.path.join(pdf_dir, filename)
+        print(f"Processing: {filename}")
+
+        pages = extract_pdf_pages(full_path)
+
+        for page_info in pages:
+            cleaned_text = clean_text(page_info["text"] or "")
+
+            if not cleaned_text.strip():
                 continue
-            for chunk in chunk_text(cleaned, max_tokens=800, overlap=120):
-                entries.append({"text": chunk, "page": p["page"], "source": fn})
+
+            # Split into chunks
+            chunks = chunk_text(cleaned_text, max_tokens=800, overlap=120)
+
+            for chunk in chunks:
+                if len(chunk.strip()) > 50:  # Only add substantial chunks
+                    entries.append({
+                        "text": chunk,
+                        "page": page_info["page"],
+                        "source": filename
+                    })
 
     if not entries:
-        return {"chunks": 0, "message": "No PDFs or no extractable text."}
+        return {
+            "chunks": 0,
+            "message": "No extractable text found in PDFs",
+            "pdf_count": len(pdf_files),
+            "success": False
+        }
 
-    texts = [e["text"] for e in entries]
-    embs = embed_texts(texts)  # (N, D)
+    print(f"Created {len(entries)} text chunks from {len(pdf_files)} PDFs")
 
-    dim = embs.shape[1]
-    index = faiss.IndexFlatIP(dim)  # cosine via normalized IP
-    index.add(embs)
+    # Create embeddings
+    print("Generating embeddings...")
+    texts = [entry["text"] for entry in entries]
+    embeddings = embed_texts(texts)  # Shape: (N, D)
 
-    save_index(index_dir=index_dir, index=index, embeddings=embs, metadatas=entries)
-    return {"chunks": len(entries), "index_dir": index_dir, "pdf_count": len([f for f in os.listdir(pdf_dir) if f.lower().endswith('.pdf')])}
+    # Create FAISS index
+    print("Building search index...")
+    dimension = embeddings.shape[1]
+    index = faiss.IndexFlatIP(dimension)  # Inner product (cosine similarity with normalized vectors)
+    index.add(embeddings)
+
+    # Save everything
+    print(f"Saving index to {index_dir}...")
+    save_index(index_dir=index_dir, index=index, embeddings=embeddings, metadatas=entries)
+
+    return {
+        "chunks": len(entries),
+        "index_dir": index_dir,
+        "pdf_count": len(pdf_files),
+        "success": True,
+        "message": f"Successfully indexed {len(entries)} chunks from {len(pdf_files)} PDFs"
+    }

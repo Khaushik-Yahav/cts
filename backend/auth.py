@@ -24,12 +24,12 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MIN", "60"))
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
 class AuthUser:
-    def __init__(self, id: str, email: str):
+    def __init__(self, id: int, email: str):
         self.id = id
         self.email = email
 
-def create_access_token(user_id: str, email: str, expires_delta: Optional[timedelta] = None) -> str:
-    to_encode = {"sub": user_id, "email": email, "iat": datetime.utcnow()}
+def create_access_token(user_id: int, email: str, expires_delta: Optional[timedelta] = None) -> str:
+    to_encode = {"sub": str(user_id), "email": email, "iat": datetime.utcnow()}
     expire = datetime.utcnow() + (expires_delta or timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES))
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, JWT_SECRET, algorithm=JWT_ALG)
@@ -42,11 +42,12 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> AuthUser:
     )
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
-        user_id: str = payload.get("sub")
+        user_id_str: str = payload.get("sub")
         email: str = payload.get("email")
-        if user_id is None or email is None:
+        if user_id_str is None or email is None:
             raise cred_exc
-    except JWTError:
+        user_id = int(user_id_str)
+    except (JWTError, ValueError):
         raise cred_exc
 
     with db_session() as db:

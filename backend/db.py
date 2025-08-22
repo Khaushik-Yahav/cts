@@ -3,6 +3,9 @@ import os
 from contextlib import contextmanager
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Prefer a full DATABASE_URL if provided; else build from parts
 DATABASE_URL = os.getenv("DATABASE_URL")
@@ -18,11 +21,11 @@ engine = create_engine(
     DATABASE_URL,
     future=True,
     pool_pre_ping=True,
+    echo=False  # Set to True for SQL debugging
 )
 
 SessionLocal = sessionmaker(
     bind=engine,
-    future=True,
     autocommit=False,
     autoflush=False,
 )
@@ -38,3 +41,8 @@ def db_session():
         raise
     finally:
         session.close()
+
+def init_database():
+    """Initialize database tables"""
+    from backend.models import Base
+    Base.metadata.create_all(bind=engine)
