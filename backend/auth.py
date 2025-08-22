@@ -6,8 +6,9 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import jwt, JWTError
 from passlib.context import CryptContext
+from sqlalchemy import select
 from backend.db import db_session
-from backend.models import User
+from backend.models import User, DoctorsRegistry
 
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
@@ -24,9 +25,18 @@ ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MIN", "60"))
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
 
 class AuthUser:
-    def __init__(self, id: int, email: str):
+    def __init__(self, id: int, email: str, role: str = "general", legal_no: str = None, full_name: str = None):
         self.id = id
         self.email = email
+        self.role = role
+        self.legal_no = legal_no
+        self.full_name = full_name
+    
+    def is_professional(self) -> bool:
+        return self.role == "professional"
+    
+    def can_upload(self) -> bool:
+        return self.role in ["professional", "admin"]
 
 def create_access_token(user_id: int, email: str, expires_delta: Optional[timedelta] = None) -> str:
     to_encode = {"sub": str(user_id), "email": email, "iat": datetime.utcnow()}
@@ -54,4 +64,39 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> AuthUser:
         user = db.get(User, user_id)
         if not user or user.email != email:
             raise cred_exc
-        return AuthUser(id=user.id, email=user.email)
+        return AuthUser(
+            id=user.id, 
+            email=user.email, 
+            role=user.role,
+            legal_no=user.legal_no,
+            full_name=user.full_name
+        )
+
+def verify_doctor_credentials(legal_no: str, phone_number: str) -> Optional[dict]:
+    """Verify doctor credentials against government registry"""
+    with db_session() as db:
+        doctor = db.execute(
+            select(DoctorsRegistry).where(
+                DoctorsRegistry.legal_no == legal_no,
+                DoctorsRegistry.phone_number == phone_number,
+                DoctorsRegistry.license_status == "active"
+            )
+        ).scalar_one_or_none()
+        
+        if doctor:
+            return {
+                "legal_no": doctor.legal_no,
+                "full_name": doctor.full_name,
+                "specialization": doctor.specialization,
+                "verified": True
+            }
+        return None
+
+# Dependency for professional users only
+async def get_professional_user(user: AuthUser = Depends(get_current_user)) -> AuthUser:
+    if not user.can_upload():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Professional account required for this action"
+        )
+    return user

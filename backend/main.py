@@ -16,13 +16,15 @@ from backend.rag.qa import answer_question
 from backend.rag.ingest import ingest_pdfs
 from backend.rag.store import index_exists
 from backend.db import db_session, init_database
-from backend.models import ChatSession, Message, User
+from backend.models import ChatSession, Message, User, Document
 from backend.auth import (
     get_current_user, 
+    get_professional_user,
     AuthUser, 
     hash_password, 
     verify_password, 
-    create_access_token
+    create_access_token,
+    verify_doctor_credentials
 )
 
 # Load environment variables
@@ -32,7 +34,7 @@ load_dotenv()
 disable_swagger = os.getenv("DISABLE_SWAGGER_UI", "false").lower() == "true"
 app = FastAPI(
     title="Medical RAG Chatbot API",
-    description="RAG-powered medical chatbot with user authentication",
+    description="RAG-powered medical chatbot with role-based authentication",
     version="1.0.0",
     docs_url=None if disable_swagger else "/docs",
     redoc_url=None if disable_swagger else "/redoc",
@@ -80,9 +82,16 @@ class NewSessionBody(BaseModel):
 class RenameSessionBody(BaseModel):
     title: str
 
-class RegisterBody(BaseModel):
+class GeneralRegisterBody(BaseModel):
     email: EmailStr
     password: str
+    full_name: str
+
+class ProfessionalRegisterBody(BaseModel):
+    email: EmailStr
+    password: str
+    legal_no: str
+    phone_number: str
 
 class LoginBody(BaseModel):
     email: EmailStr
@@ -125,100 +134,184 @@ def health_check():
     }
 
 # --- Authentication Routes ---
-@app.post("/auth/register")
-def register(body: RegisterBody):
-    """Register a new user"""
+@app.post("/auth/register/general")
+def register_general(body: GeneralRegisterBody):
+    """Register a general user (read-only access)"""
     with db_session() as db:
         # Check if user already exists
         existing = db.execute(
             select(User).where(User.email == body.email)
         ).scalar_one_or_none()
-
+        
         if existing:
             raise HTTPException(
                 status_code=400, 
                 detail="Email already registered"
             )
-
-        # Create new user
+        
+        # Create new general user
         user = User(
             email=body.email,
-            password_hash=hash_password(body.password)
+            password_hash=hash_password(body.password),
+            full_name=body.full_name,
+            role="general",
+            is_verified=True  # General users are auto-verified
         )
         db.add(user)
         db.flush()
-
+        
         # Generate access token
         token = create_access_token(user.id, user.email)
-
+        
         return {
             "access_token": token,
             "token_type": "bearer",
-            "user": {"id": user.id, "email": user.email}
+            "user": {
+                "id": user.id, 
+                "email": user.email,
+                "role": user.role,
+                "full_name": user.full_name
+            }
+        }
+
+@app.post("/auth/register/professional")
+def register_professional(body: ProfessionalRegisterBody):
+    """Register a professional user (doctor) with verification"""
+    with db_session() as db:
+        # Check if user already exists
+        existing = db.execute(
+            select(User).where(User.email == body.email)
+        ).scalar_one_or_none()
+        
+        if existing:
+            raise HTTPException(
+                status_code=400, 
+                detail="Email already registered"
+            )
+        
+        # Verify doctor credentials against government registry
+        doctor_info = verify_doctor_credentials(body.legal_no, body.phone_number)
+        if not doctor_info:
+            raise HTTPException(
+                status_code=400, 
+                detail="Could not verify your medical license. Please check your credentials or contact support."
+            )
+        
+        # Create new professional user
+        user = User(
+            email=body.email,
+            password_hash=hash_password(body.password),
+            full_name=doctor_info["full_name"],
+            legal_no=body.legal_no,
+            phone_number=body.phone_number,
+            role="professional",
+            is_verified=True
+        )
+        db.add(user)
+        db.flush()
+        
+        # Generate access token
+        token = create_access_token(user.id, user.email)
+        
+        return {
+            "access_token": token,
+            "token_type": "bearer",
+            "user": {
+                "id": user.id, 
+                "email": user.email,
+                "role": user.role,
+                "full_name": user.full_name,
+                "legal_no": user.legal_no,
+                "specialization": doctor_info.get("specialization")
+            }
         }
 
 @app.post("/auth/login")
 def login(body: LoginBody):
-    """Login user"""
+    """Login user (any role)"""
     with db_session() as db:
         user = db.execute(
             select(User).where(User.email == body.email)
         ).scalar_one_or_none()
-
+        
         if not user or not verify_password(body.password, user.password_hash):
             raise HTTPException(
                 status_code=401, 
                 detail="Invalid credentials"
             )
-
+        
         token = create_access_token(user.id, user.email)
-
+        
         return {
             "access_token": token,
             "token_type": "bearer",
-            "user": {"id": user.id, "email": user.email}
+            "user": {
+                "id": user.id, 
+                "email": user.email,
+                "role": user.role,
+                "full_name": user.full_name,
+                "legal_no": user.legal_no
+            }
         }
 
 @app.get("/auth/me")
 def get_current_user_info(user: AuthUser = Depends(get_current_user)):
     """Get current user information"""
-    return {"id": user.id, "email": user.email}
+    return {
+        "id": user.id, 
+        "email": user.email,
+        "role": user.role,
+        "full_name": user.full_name,
+        "legal_no": user.legal_no,
+        "can_upload": user.can_upload()
+    }
 
-# --- File Upload & Ingestion Routes ---
+# --- File Upload & Ingestion Routes (Professional Only) ---
 @app.post("/upload")
 async def upload_pdf(
     file: UploadFile = File(...),
-    user: AuthUser = Depends(get_current_user),
+    user: AuthUser = Depends(get_professional_user),  # Only professionals can upload
 ):
-    """Upload a PDF file and add it to the knowledge base"""
+    """Upload a PDF file (professionals only)"""
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(
             status_code=400, 
             detail="Only PDF files are allowed"
         )
-
+    
     try:
         # Save uploaded file
         os.makedirs("data/pdfs", exist_ok=True)
         file_path = os.path.join("data/pdfs", file.filename)
-
+        
         with open(file_path, "wb") as f:
             shutil.copyfileobj(file.file, f)
-
+        
+        # Record document in database
+        with db_session() as db:
+            document = Document(
+                user_id=user.id,
+                filename=file.filename,
+                filepath=file_path,
+                doc_type="medical"
+            )
+            db.add(document)
+        
         # Re-index all PDFs
         stats = ingest_pdfs(pdf_dir="data/pdfs", index_dir="data/index")
-
+        
         return {
             "status": "uploaded",
             "filename": file.filename,
+            "uploaded_by": user.full_name,
             "stats": stats
         }
-
+    
     except Exception as e:
         # Clean up file if ingestion failed
         if 'file_path' in locals() and os.path.exists(file_path):
             os.remove(file_path)
-
+        
         raise HTTPException(
             status_code=500, 
             detail=f"Upload failed: {str(e)}"
@@ -228,9 +321,9 @@ async def upload_pdf(
 async def manual_ingest(
     pdf_dir: str = "data/pdfs",
     index_dir: str = "data/index",
-    user: AuthUser = Depends(get_current_user),
+    user: AuthUser = Depends(get_professional_user),  # Only professionals
 ):
-    """Manually trigger PDF ingestion"""
+    """Manually trigger PDF ingestion (professionals only)"""
     try:
         stats = ingest_pdfs(pdf_dir=pdf_dir, index_dir=index_dir)
         return {"status": "completed", "stats": stats}
@@ -240,18 +333,18 @@ async def manual_ingest(
             detail=f"Ingestion failed: {str(e)}"
         )
 
-# --- Chat/QA Routes ---
+# --- Chat/QA Routes (All authenticated users) ---
 @app.post("/ask")
 async def ask_question(body: AskBody, user: AuthUser = Depends(get_current_user)):
-    """Ask a question to the RAG system"""
-
+    """Ask a question to the RAG system (all users can query)"""
+    
     # Check if index exists
     if not index_exists("data/index"):
         raise HTTPException(
             status_code=400, 
-            detail="No knowledge base found. Please upload PDF files first."
+            detail="No knowledge base found. Professional users need to upload PDF files first."
         )
-
+    
     try:
         # Create session if none provided
         effective_session_id = body.session_id
@@ -270,7 +363,7 @@ async def ask_question(body: AskBody, user: AuthUser = Depends(get_current_user)
                         status_code=404, 
                         detail="Session not found"
                     )
-
+        
         # Get answer
         answer, citations, session_id, limit_reached = answer_question(
             question=body.question,
@@ -280,14 +373,14 @@ async def ask_question(body: AskBody, user: AuthUser = Depends(get_current_user)
             provider=body.provider,
             model_override=body.model,
         )
-
+        
         return {
             "answer": answer,
             "citations": citations,
             "session_id": session_id,
             "limit_reached": limit_reached
         }
-
+    
     except HTTPException:
         raise
     except Exception as e:
@@ -296,7 +389,7 @@ async def ask_question(body: AskBody, user: AuthUser = Depends(get_current_user)
             detail=f"Question processing failed: {str(e)}"
         )
 
-# --- Session Management Routes ---
+# --- Session Management Routes (All users) ---
 @app.get("/sessions", response_model=List[SessionResponse])
 def list_sessions(user: AuthUser = Depends(get_current_user)):
     """Get all sessions for the current user"""
@@ -306,7 +399,7 @@ def list_sessions(user: AuthUser = Depends(get_current_user)):
             .where(ChatSession.user_id == user.id)
             .order_by(ChatSession.updated_at.desc())
         ).scalars().all()
-
+        
         return [
             SessionResponse(
                 id=s.id,
@@ -330,7 +423,7 @@ def create_session(
         )
         db.add(session)
         db.flush()
-
+        
         return SessionResponse(
             id=session.id,
             title=session.title,
@@ -348,7 +441,7 @@ def get_session(
         session = db.get(ChatSession, session_id)
         if not session or session.user_id != user.id:
             raise HTTPException(status_code=404, detail="Session not found")
-
+        
         return {
             "id": session.id,
             "title": session.title,
@@ -378,10 +471,10 @@ def rename_session(
         session = db.get(ChatSession, session_id)
         if not session or session.user_id != user.id:
             raise HTTPException(status_code=404, detail="Session not found")
-
+        
         session.title = body.title
         session.updated_at = datetime.utcnow()
-
+        
         return SessionResponse(
             id=session.id,
             title=session.title,
@@ -399,7 +492,7 @@ def delete_session(
         session = db.get(ChatSession, session_id)
         if not session or session.user_id != user.id:
             raise HTTPException(status_code=404, detail="Session not found")
-
+        
         db.delete(session)
         return {"deleted": True}
 
@@ -412,16 +505,27 @@ def get_stats(user: AuthUser = Depends(get_current_user)):
             select(func.count(ChatSession.id))
             .where(ChatSession.user_id == user.id)
         ).scalar()
-
+        
         message_count = db.execute(
             select(func.count(Message.id))
             .join(ChatSession)
             .where(ChatSession.user_id == user.id)
         ).scalar()
-
+        
+        # Professional users can see upload stats
+        upload_count = 0
+        if user.can_upload():
+            upload_count = db.execute(
+                select(func.count(Document.id))
+                .where(Document.user_id == user.id)
+            ).scalar()
+        
         return {
+            "user_role": user.role,
+            "can_upload": user.can_upload(),
             "sessions": session_count or 0,
             "messages": message_count or 0,
+            "uploaded_documents": upload_count or 0,
             "index_exists": index_exists("data/index"),
         }
 

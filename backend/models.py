@@ -1,33 +1,61 @@
 from __future__ import annotations
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey
+from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey, Boolean
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import declarative_base, relationship
+import enum
 
 Base = declarative_base()
 
+class UserRole(str, enum.Enum):
+    GENERAL = "general"
+    PROFESSIONAL = "professional"
+    ADMIN = "admin"
+
+class LicenseStatus(str, enum.Enum):
+    ACTIVE = "active"
+    SUSPENDED = "suspended"
+    EXPIRED = "expired"
+
 class User(Base):
     __tablename__ = "users"
-
+    
     id = Column(Integer, primary_key=True, autoincrement=True)
     email = Column(String(255), unique=True, index=True, nullable=False)
     password_hash = Column(Text, nullable=False)
+    role = Column(String(20), default="general")  # general, professional, admin
+    legal_no = Column(String(50), nullable=True)  # Doctor license number
+    phone_number = Column(String(20), nullable=True)
+    full_name = Column(String(255), nullable=True)
+    is_verified = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
-
+    
     # Relationships
     sessions = relationship("ChatSession", back_populates="user", cascade="all, delete-orphan")
     documents = relationship("Document", back_populates="user", cascade="all, delete-orphan")
 
+class DoctorsRegistry(Base):
+    __tablename__ = "doctors_registry"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    legal_no = Column(String(50), unique=True, nullable=False)
+    full_name = Column(String(255), nullable=False)
+    phone_number = Column(String(20), nullable=False)
+    specialization = Column(String(255), nullable=True)
+    license_status = Column(String(20), default="active")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
 class ChatSession(Base):
     __tablename__ = "chat_sessions"
-
+    
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     title = Column(String(255), default="New chat")
     summary = Column(Text, default="")
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
+    
     # Relationships
     user = relationship("User", back_populates="sessions")
     messages = relationship(
@@ -39,26 +67,26 @@ class ChatSession(Base):
 
 class Message(Base):
     __tablename__ = "messages"
-
+    
     id = Column(Integer, primary_key=True, autoincrement=True)
     session_id = Column(Integer, ForeignKey("chat_sessions.id", ondelete="CASCADE"), nullable=False)
     role = Column(String(50), nullable=False)  # "user" or "assistant"
     content = Column(Text, nullable=False)
     citations = Column(JSONB, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
-
+    
     # Relationships
     session = relationship("ChatSession", back_populates="messages")
 
 class Document(Base):
     __tablename__ = "documents"
-
+    
     id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True)  # null = global doc
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)  # Only doctors
     filename = Column(String(255), nullable=False)
     filepath = Column(Text, nullable=False)
-    doc_type = Column(String(50), nullable=False)  # 'global' or 'prescription'
+    doc_type = Column(String(50), default="medical", nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
     # Relationships
     user = relationship("User", back_populates="documents")
