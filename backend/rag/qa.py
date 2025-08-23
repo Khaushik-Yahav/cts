@@ -3,44 +3,66 @@ import os
 from typing import Tuple, List, Dict, Optional
 from sqlalchemy import select
 from backend.rag.retrieve import retrieve
-from backend.rag.llm import generate_answer, summarize_history, Provider
+from backend.rag.llm import generate_answer, summarize_history, Provider, is_greeting_or_casual, handle_greeting_or_casual
 from backend.db import db_session
 from backend.models import ChatSession, Message
+
 
 # Configuration
 MAX_MESSAGES_PER_SESSION = int(os.getenv("MAX_MESSAGES_PER_SESSION", "12"))
 MAX_QA_PAIRS_IN_PROMPT = 6  # How many recent Q&A pairs to include in prompt
 
-PROMPT_TEMPLATE = """You are answering a user question strictly using the CONTEXT.
-If the answer is not in the context, say "I don't know based on the provided documents."
 
-ROLLING SUMMARY (earlier dialogue condensed):
+# Much better prompt template
+PROMPT_TEMPLATE = """You are a medical information assistant. Answer the user's question using the provided medical documents.
+
+INSTRUCTIONS:
+- Use the DOCUMENT CONTEXT below to answer questions
+- For simple questions, provide concise answers (1-2 sentences)  
+- For complex medical topics, provide detailed explanations in multiple points
+- Always cite your sources at the end using [CITATIONS: filename p.X, filename p.Y] format
+- If the context doesn't contain relevant information, say "I don't have specific information about this in the current knowledge base" and provide general medical guidance if appropriate
+
+ROLLING SUMMARY (earlier conversation):
 {rolling_summary}
 
-RECENT CHAT (last {recent_n} QA pairs):
+RECENT CONVERSATION:
 {recent_history}
 
-QUESTION:
-{question}
-
-DOCUMENT CONTEXT (retrieved passages with [source p.page] headers):
+DOCUMENT CONTEXT (medical sources):
 {context}
 
-Return a concise answer suitable for clinicians and patients.
-End with citations like: [CITATIONS: filename p.X, filename p.Y].
-"""
+USER QUESTION: {question}
+
+MEDICAL RESPONSE:"""
+
 
 def _format_context(chunks: List[Dict]) -> str:
-    """Format retrieved chunks for the prompt"""
+    """Format retrieved chunks for better LLM understanding"""
+    if not chunks:
+        return "No relevant documents found."
+    
     parts = []
-    for c in chunks:
-        header = f"[{c['source']} p.{c['page']}]"
-        parts.append(header + "\n" + c["text"])
+    for i, c in enumerate(chunks, 1):
+        # Better formatting for medical context
+        header = f"--- SOURCE {i}: {c['source']} (Page {c['page']}) | Relevance Score: {c['score']:.2f} ---"
+        content = c["text"].strip()
+        parts.append(f"{header}\n{content}")
+    
     return "\n\n".join(parts)
 
+
 def _format_history(pairs: List[Dict]) -> str:
-    """Format Q&A pairs for the prompt"""
-    return "\n\n".join([f"Q: {p['q']}\nA: {p['a']}" for p in pairs])
+    """Format Q&A pairs for conversation context"""
+    if not pairs:
+        return "No previous conversation."
+    
+    formatted = []
+    for i, p in enumerate(pairs, 1):
+        formatted.append(f"Q{i}: {p['q']}\nA{i}: {p['a']}")
+    
+    return "\n\n".join(formatted)
+
 
 def _get_last_n_qa_pairs(db, session_id: int, n_pairs: int) -> List[Dict]:
     """Get the last N Q&A pairs from a session"""
@@ -59,10 +81,12 @@ def _get_last_n_qa_pairs(db, session_id: int, n_pairs: int) -> List[Dict]:
 
     return pairs[-n_pairs:]
 
+
 def _count_messages_in_session(db, session_id: int) -> int:
     """Count total messages in a session"""
     stmt = select(Message).where(Message.session_id == session_id)
     return len(list(db.execute(stmt).scalars()))
+
 
 def _maybe_update_summary(db, sess: ChatSession, provider: Provider):
     """Update session summary if we have too many messages"""
@@ -83,6 +107,7 @@ def _maybe_update_summary(db, sess: ChatSession, provider: Provider):
         sess.summary = (sess.summary + "\n\n" + rolled).strip()
     else:
         sess.summary = rolled
+
 
 def answer_question(
     question: str,
@@ -113,13 +138,31 @@ def answer_question(
             )
             return limit_message, [], sess.id, True
 
+        # Handle greetings and casual interactions FIRST
+        if is_greeting_or_casual(question):
+            answer = handle_greeting_or_casual(question)
+            
+            # Store the messages
+            user_msg = Message(session_id=sess.id, role="user", content=question)
+            db.add(user_msg)
+            db.flush()
+            
+            asst_msg = Message(session_id=sess.id, role="assistant", content=answer, citations=[])
+            db.add(asst_msg)
+            
+            # Update session timestamp
+            from datetime import datetime
+            sess.updated_at = datetime.utcnow()
+            
+            return answer, [], sess.id, False
+
         # Store the user message
         user_msg = Message(session_id=sess.id, role="user", content=question)
         db.add(user_msg)
         db.flush()
 
         try:
-            # Retrieve relevant documents
+            # Retrieve relevant documents with better filtering
             hits = retrieve(question, index_dir=index_dir, top_k=top_k)
 
             # Build prompt with context
@@ -128,8 +171,7 @@ def answer_question(
             context = _format_context(hits)
 
             prompt = PROMPT_TEMPLATE.format(
-                rolling_summary=sess.summary or "",
-                recent_n=len(pairs_recent),
+                rolling_summary=sess.summary or "No previous summary.",
                 recent_history=recent_history,
                 question=question,
                 context=context,

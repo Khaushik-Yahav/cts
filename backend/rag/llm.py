@@ -1,16 +1,58 @@
 from __future__ import annotations
 import os
 import time
+import re
 from typing import Literal, Optional
+
 
 Provider = Literal["groq", "gemini", "openai", "auto"]
 
+
+# Much better system prompt - not overly restrictive
 SYSTEM_BASE = (
-    "You are a careful medical assistant. "
-    "Answer ONLY from the provided context. "
-    "If unsure, say you do not know. "
-    "Be precise and concise in your responses."
+    "You are a helpful medical information assistant. "
+    "Provide accurate, evidence-based responses using the context provided. "
+    "For simple questions, give concise 1-2 sentence answers. "
+    "For complex medical topics, provide detailed explanations in multiple bullet points. "
+    "Always cite sources when using provided context. "
+    "If information isn't in the context, acknowledge this and provide general medical guidance when appropriate."
 )
+
+# Greeting responses
+GREETING_RESPONSES = {
+    "hi": "Hello! I'm your medical information assistant. You can ask me questions about medications, treatments, clinical studies, or any other medical topics. How can I help you today?",
+    "hello": "Hello! I'm here to help with medical information and questions. What would you like to know about?",
+    "hey": "Hi there! I'm your medical assistant. Feel free to ask me any medical questions you might have.",
+    "thank": "You're welcome! Feel free to ask me any other medical questions you might have.",
+    "thanks": "You're welcome! Is there anything else you'd like to know about?",
+    "bye": "Goodbye! Take care, and don't hesitate to reach out if you have any medical questions in the future.",
+    "okay": "Is there anything specific you'd like to know about? I can help with medical information, drug details, clinical studies, and more."
+}
+
+
+def is_greeting_or_casual(text: str) -> bool:
+    """Check if the input is a greeting or casual interaction"""
+    text = text.lower().strip()
+    casual_patterns = [
+        "hi", "hello", "hey", "good morning", "good afternoon", "good evening",
+        "how are you", "what's up", "sup", "greetings", "thank you", "thanks",
+        "bye", "goodbye", "see you", "ok", "okay", "alright"
+    ]
+    
+    # Check for exact matches or if query is very short
+    return any(pattern in text for pattern in casual_patterns) or len(text.strip()) <= 3
+
+
+def handle_greeting_or_casual(text: str) -> str:
+    """Handle greetings and casual interactions"""
+    text = text.lower().strip()
+    
+    for pattern, response in GREETING_RESPONSES.items():
+        if pattern in text:
+            return response
+    
+    return "I'm here to help with medical information. What would you like to know about?"
+
 
 def generate_answer(
     prompt: str,
@@ -98,6 +140,7 @@ def generate_answer(
             print(f"OpenAI failed: {e}")
 
     return "[No LLM providers available or all failed]"
+
 
 def summarize_history(text: str, provider: Provider = "auto", max_tokens: int = 200) -> str:
     """
