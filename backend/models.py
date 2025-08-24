@@ -1,5 +1,5 @@
 from __future__ import annotations
-from datetime import datetime
+from datetime import datetime, timedelta
 from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey, Boolean
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import declarative_base, relationship
@@ -15,6 +15,11 @@ class UserRole(str, enum.Enum):
 class LicenseStatus(str, enum.Enum):
     ACTIVE = "active"
     SUSPENDED = "suspended"
+    EXPIRED = "expired"
+
+class OtpStatus(str, enum.Enum):
+    PENDING = "pending"
+    VERIFIED = "verified"
     EXPIRED = "expired"
 
 class User(Base):
@@ -33,6 +38,36 @@ class User(Base):
     # Relationships
     sessions = relationship("ChatSession", back_populates="user", cascade="all, delete-orphan")
     documents = relationship("Document", back_populates="user", cascade="all, delete-orphan")
+    otp_verifications = relationship("OtpVerification", back_populates="user", cascade="all, delete-orphan")
+
+class OtpVerification(Base):
+    __tablename__ = "otp_verifications"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True)
+    phone_number = Column(String(20), nullable=False)
+    email = Column(String(255), nullable=False)
+    otp_code = Column(String(6), nullable=False)
+    status = Column(String(20), default="pending")  # pending, verified, expired
+    attempts = Column(Integer, default=0)
+    max_attempts = Column(Integer, default=3)
+    expires_at = Column(DateTime, nullable=False)
+    verified_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Store registration data temporarily
+    registration_data = Column(JSONB, nullable=True)
+    
+    # Relationships
+    user = relationship("User", back_populates="otp_verifications")
+    
+    @property
+    def is_expired(self):
+        return datetime.utcnow() > self.expires_at
+    
+    @property
+    def attempts_exhausted(self):
+        return self.attempts >= self.max_attempts
 
 class DoctorsRegistry(Base):
     __tablename__ = "doctors_registry"

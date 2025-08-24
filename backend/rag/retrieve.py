@@ -1,9 +1,9 @@
 from __future__ import annotations
+
 import faiss
 from typing import List, Dict, Any
 from backend.rag.embeddings import embed_texts
 from backend.rag.store import load_index
-
 
 def retrieve(query: str, index_dir: str, top_k: int = 4) -> List[Dict[str, Any]]:
     """
@@ -17,6 +17,8 @@ def retrieve(query: str, index_dir: str, top_k: int = 4) -> List[Dict[str, Any]]
 
     # Embed the query
     qvec = embed_texts([query])  # Shape: (1, D)
+    if qvec is None or qvec.size == 0:
+        raise ValueError("Query embedding returned empty vector.")
 
     # Search for more candidates to filter
     search_k = min(top_k * 3, len(metadatas))  # Get 3x candidates for filtering
@@ -39,7 +41,7 @@ def retrieve(query: str, index_dir: str, top_k: int = 4) -> List[Dict[str, Any]]
         meta = metadatas[int(idx)]
         
         # Skip very short chunks that likely won't be helpful
-        if len(meta["text"].strip()) < 50:
+        if len(meta.get("text", "").strip()) < 50:
             continue
 
         results.append({

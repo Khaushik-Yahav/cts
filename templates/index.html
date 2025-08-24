@@ -63,18 +63,37 @@
                 <div id="professional-register-form" class="form-section" style="display: none;">
                     <h2>👨‍⚕️ Register as Medical Professional</h2>
                     <div class="professional-info">
-                        <p><strong>Note:</strong> Your medical license will be verified against government records.</p>
+                        <p><strong>Note:</strong> Your medical license will be verified and an OTP will be sent to your mobile number.</p>
                     </div>
                     <form id="professionalRegisterForm">
                         <input type="text" id="professionalLegalNo" placeholder="Medical License Number (e.g., MED001)" required>
                         <input type="tel" id="professionalPhone" placeholder="Phone Number (e.g., 9876543210)" required>
                         <input type="email" id="professionalEmail" placeholder="Email" required>
                         <input type="password" id="professionalPassword" placeholder="Password" minlength="6" required>
-                        <button type="submit">Verify & Register</button>
+                        <button type="submit">Verify & Send OTP</button>
                     </form>
                     <div class="form-links">
                         <p>Not a medical professional? <a href="#" id="switchToGeneral">Register as General User</a></p>
                         <p>Already have an account? <a href="#" id="showLoginFromProfessional">Login here</a></p>
+                    </div>
+                </div>
+
+                <!-- OTP Verification Form -->
+                <div id="otp-verification-form" class="form-section" style="display: none;">
+                    <h2>📱 Verify Your Mobile Number</h2>
+                    <div class="otp-info">
+                        <p>Enter the 6-digit OTP sent to <strong id="otpPhoneDisplay"></strong></p>
+                        <p class="otp-timer">OTP expires in: <span id="otpTimer">5:00</span></p>
+                    </div>
+                    <form id="otpVerificationForm">
+                        <div class="otp-input-container">
+                            <input type="text" id="otpCode" placeholder="Enter 6-digit OTP" maxlength="6" required>
+                        </div>
+                        <button type="submit" id="verifyOtpBtn">Verify OTP</button>
+                    </form>
+                    <div class="form-links">
+                        <p>Didn't receive OTP? <button type="button" id="resendOtpBtn" class="link-btn">Resend OTP</button></p>
+                        <p><a href="#" id="backToProfessionalRegister">← Back to Registration</a></p>
                     </div>
                 </div>
             </div>

@@ -1,66 +1,124 @@
-#!/usr/bin/env python3
-"""
-Database migration script to add missing updated_at column
-"""
-import os
+from __future__ import annotations
 import sys
-from sqlalchemy import create_engine, text
-from dotenv import load_dotenv
+import os
+from datetime import datetime
 
-load_dotenv()
+# Add the project root to Python path
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-# Database connection
-DATABASE_URL = os.getenv("DATABASE_URL")
-if not DATABASE_URL:
-    DB_USER = os.getenv("DB_USER", "postgres")
-    DB_PASSWORD = os.getenv("DB_PASSWORD", "123456")
-    DB_HOST = os.getenv("DB_HOST", "localhost")
-    DB_PORT = os.getenv("DB_PORT", "5432")
-    DB_NAME = os.getenv("DB_NAME", "chatbotdb")
-    DATABASE_URL = f"postgresql+psycopg2://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
-
-def migrate_database():
-    """Add missing updated_at column to chat_sessions table"""
+def create_sample_doctors():
+    """Create sample doctors for testing"""
+    from backend.db import db_session
+    from backend.models import DoctorsRegistry
+    
+    sample_doctors = [
+        {
+            "legal_no": "MED001",
+            "full_name": "Dr. Rajesh Kumar",
+            "phone_number": "9876543210",
+            "specialization": "Cardiology",
+            "license_status": "active"
+        },
+        {
+            "legal_no": "MED002", 
+            "full_name": "Dr. Priya Sharma",
+            "phone_number": "9876543211",
+            "specialization": "Pediatrics",
+            "license_status": "active"
+        },
+        {
+            "legal_no": "MED003",
+            "full_name": "Dr. Amit Patel",
+            "phone_number": "9876543212", 
+            "specialization": "Orthopedics",
+            "license_status": "active"
+        },
+        {
+            "legal_no": "MED004",
+            "full_name": "Dr. Sarah Johnson",
+            "phone_number": "9876543213", 
+            "specialization": "Dermatology",
+            "license_status": "active"
+        },
+        {
+            "legal_no": "MED005",
+            "full_name": "Dr. Michael Chen",
+            "phone_number": "9876543214", 
+            "specialization": "Neurology",
+            "license_status": "active"
+        },
+        {
+            "legal_no": "MED006",
+            "full_name": "Dr. Emily Rodriguez",
+            "phone_number": "9876543215", 
+            "specialization": "Psychiatry",
+            "license_status": "active"
+        },
+        {
+            "legal_no": "MED007",
+            "full_name": "Dr. James Wilson",
+            "phone_number": "9876543216", 
+            "specialization": "Emergency Medicine",
+            "license_status": "active"
+        }
+    ]
+    
     try:
-        engine = create_engine(DATABASE_URL)
+        with db_session() as db:
+            for doc_data in sample_doctors:
+                # Check if doctor already exists
+                existing = db.query(DoctorsRegistry).filter(
+                    DoctorsRegistry.legal_no == doc_data["legal_no"]
+                ).first()
+                
+                if not existing:
+                    doctor = DoctorsRegistry(**doc_data)
+                    db.add(doctor)
+                    print(f"✅ Created doctor: {doc_data['full_name']} ({doc_data['legal_no']})")
+                else:
+                    print(f"⚠️ Doctor already exists: {doc_data['full_name']} ({doc_data['legal_no']})")
+    
+    except Exception as e:
+        print(f"❌ Error creating sample doctors: {e}")
 
-        with engine.connect() as conn:
-            # Check if column already exists
-            result = conn.execute(text("""
-                SELECT column_name 
-                FROM information_schema.columns 
-                WHERE table_name = 'chat_sessions' 
-                AND column_name = 'updated_at'
-            """))
-
-            if result.fetchone():
-                print("✅ Column 'updated_at' already exists!")
-                return
-
-            # Add the missing column
-            print("🔧 Adding 'updated_at' column to chat_sessions table...")
-            conn.execute(text("""
-                ALTER TABLE chat_sessions 
-                ADD COLUMN updated_at TIMESTAMP DEFAULT NOW()
-            """))
-
-            # Update existing records
-            print("📝 Updating existing records...")
-            conn.execute(text("""
-                UPDATE chat_sessions 
-                SET updated_at = created_at 
-                WHERE updated_at IS NULL
-            """))
-
-            conn.commit()
-            print("✅ Database migration completed successfully!")
-
+def main():
+    """Main migration function"""
+    try:
+        print("🔧 Starting database migration...")
+        print("=" * 50)
+        
+        # Import after path setup
+        from backend.db import init_database
+        from backend.models import Base
+        
+        print("📊 Initializing database tables...")
+        init_database()
+        print("✅ Database tables created successfully!")
+        
+        print("\n👨‍⚕️ Creating sample doctors for testing...")
+        create_sample_doctors()
+        print("✅ Sample doctors created successfully!")
+        
+        print("\n🎉 Database migration completed successfully!")
+        print("=" * 50)
+        print("\n📋 Test Credentials for Professional Registration:")
+        print("License: MED001, Phone: 9876543210 - Dr. Rajesh Kumar (Cardiology)")
+        print("License: MED002, Phone: 9876543211 - Dr. Priya Sharma (Pediatrics)")
+        print("License: MED003, Phone: 9876543212 - Dr. Amit Patel (Orthopedics)")
+        print("License: MED004, Phone: 9876543213 - Dr. Sarah Johnson (Dermatology)")
+        print("License: MED005, Phone: 9876543214 - Dr. Michael Chen (Neurology)")
+        print("License: MED006, Phone: 9876543215 - Dr. Emily Rodriguez (Psychiatry)")
+        print("License: MED007, Phone: 9876543216 - Dr. James Wilson (Emergency Medicine)")
+        print("\n🚀 You can now run: python run.py")
+        
+    except ImportError as e:
+        print(f"❌ Import Error: {e}")
+        print("💡 Make sure all required dependencies are installed:")
+        print("   pip install -r requirements.txt")
+        
     except Exception as e:
         print(f"❌ Migration failed: {e}")
-        return False
-
-    return True
+        print("💡 Make sure PostgreSQL is running and connection details are correct in .env file")
 
 if __name__ == "__main__":
-    success = migrate_database()
-    sys.exit(0 if success else 1)
+    main()

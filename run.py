@@ -1,101 +1,51 @@
 #!/usr/bin/env python3
 """
-Startup script for Medical RAG Chatbot
+Medical RAG Chatbot - Production Runner
 """
+
 import os
 import sys
-import subprocess
+import uvicorn
 from pathlib import Path
 
-def check_requirements():
-    """Check if all required packages are installed"""
-    try:
-        import fastapi
-        import uvicorn
-        import sqlalchemy
-        import psycopg2
-        import sentence_transformers
-        import faiss
-        import groq
-        import google.generativeai
-        print("✓ All required packages are installed")
-        return True
-    except ImportError as e:
-        print(f"✗ Missing package: {e}")
-        print("Please install requirements with: pip install -r requirements.txt")
-        return False
-
-def check_database():
-    """Check database connection"""
-    try:
-        from backend.db import engine
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
-        print("✓ Database connection successful")
-        return True
-    except Exception as e:
-        print(f"✗ Database connection failed: {e}")
-        print("Please ensure PostgreSQL is running and database 'chatbotdb' exists")
-        return False
-
-def create_directories():
-    """Create necessary directories"""
-    dirs = ["data/pdfs", "data/index", "static", "templates"]
-    for dir_path in dirs:
-        Path(dir_path).mkdir(parents=True, exist_ok=True)
-    print("✓ Directories created")
-
-def check_env_file():
-    """Check if .env file exists"""
-    if not Path(".env").exists():
-        print("✗ .env file not found")
-        print("Please create a .env file with required environment variables")
-        return False
-    print("✓ .env file found")
-    return True
-
 def main():
-    """Main startup function"""
-    print("Medical RAG Chatbot - Startup Check")
-    print("=" * 40)
-
-    # Check requirements
-    if not check_requirements():
-        sys.exit(1)
-
-    # Check .env file
-    if not check_env_file():
-        sys.exit(1)
-
-    # Create directories
-    create_directories()
-
-    # Check database
-    if not check_database():
-        print("\nDatabase setup instructions:")
-        print("1. Start PostgreSQL service")
-        print("2. Create database: createdb chatbotdb")
-        print("3. Update .env file with correct database credentials")
-        sys.exit(1)
-
-    print("\n✓ All checks passed!")
-    print("Starting Medical RAG Chatbot...")
-    print("Access the application at: http://localhost:8000")
-    print("API documentation at: http://localhost:8000/docs")
-    print("\nPress Ctrl+C to stop the server")
-    print("-" * 40)
-
-    # Start the server
+    """Run the Medical RAG Chatbot application"""
+    
+    # Ensure we're in the right directory
+    project_root = Path(__file__).parent
+    os.chdir(project_root)
+    
+    # Add current directory to Python path
+    sys.path.insert(0, str(project_root))
+    
+    print("🏥 Starting Medical RAG Chatbot...")
+    print("=" * 50)
+    print("📍 Project Directory:", project_root)
+    print("🐍 Python Version:", sys.version)
+    print("📦 Working Directory:", os.getcwd())
+    print("=" * 50)
+    
     try:
-        subprocess.run([
-            sys.executable, "-m", "uvicorn", 
-            "backend.main:app", 
-            "--host", "0.0.0.0", 
-            "--port", "8000", 
-            "--reload"
-        ])
+        # Import and run the FastAPI app
+        uvicorn.run(
+            "backend.main:app",
+            host="0.0.0.0",
+            port=8000,
+            reload=True,
+            reload_dirs=[str(project_root)],
+            log_level="info",
+            access_log=True
+        )
     except KeyboardInterrupt:
-        print("\n\nServer stopped by user")
+        print("\n👋 Shutting down Medical RAG Chatbot...")
+    except Exception as e:
+        print(f"❌ Failed to start application: {e}")
+        print("\n💡 Troubleshooting steps:")
+        print("1. Make sure PostgreSQL is running")
+        print("2. Check your .env file configuration")
+        print("3. Run: pip install -r requirements.txt")
+        print("4. Run: python migrate_db.py")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

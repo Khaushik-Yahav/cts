@@ -1,12 +1,11 @@
 from __future__ import annotations
+
 import os
 import time
 import re
 from typing import Literal, Optional
 
-
 Provider = Literal["groq", "gemini", "openai", "auto"]
-
 
 # Much better system prompt - not overly restrictive
 SYSTEM_BASE = (
@@ -29,7 +28,6 @@ GREETING_RESPONSES = {
     "okay": "Is there anything specific you'd like to know about? I can help with medical information, drug details, clinical studies, and more."
 }
 
-
 def is_greeting_or_casual(text: str) -> bool:
     """Check if the input is a greeting or casual interaction"""
     text = text.lower().strip()
@@ -42,7 +40,6 @@ def is_greeting_or_casual(text: str) -> bool:
     # Check for exact matches or if query is very short
     return any(pattern in text for pattern in casual_patterns) or len(text.strip()) <= 3
 
-
 def handle_greeting_or_casual(text: str) -> str:
     """Handle greetings and casual interactions"""
     text = text.lower().strip()
@@ -52,7 +49,6 @@ def handle_greeting_or_casual(text: str) -> str:
             return response
     
     return "I'm here to help with medical information. What would you like to know about?"
-
 
 def generate_answer(
     prompt: str,
@@ -140,7 +136,6 @@ def generate_answer(
             print(f"OpenAI failed: {e}")
 
     return "[No LLM providers available or all failed]"
-
 
 def summarize_history(text: str, provider: Provider = "auto", max_tokens: int = 200) -> str:
     """

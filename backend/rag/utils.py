@@ -1,6 +1,6 @@
 from __future__ import annotations
-import re
 
+import re
 
 def clean_text(t: str) -> str:
     """Clean and normalize text for better processing"""
@@ -24,7 +24,6 @@ def clean_text(t: str) -> str:
     t = re.sub(r'(\d+)\s+(mg|mcg|g|ml|L)', r'\1 \2', t)  # Fix dosage units
     
     return t.strip()
-
 
 def chunk_text(text: str, max_tokens: int = 800, overlap: int = 120) -> list[str]:
     """
@@ -77,7 +76,6 @@ def chunk_text(text: str, max_tokens: int = 800, overlap: int = 120) -> list[str
     
     print(f"Created {len(chunks)} chunks from text of length {len(text)}")
     return chunks
-
 
 def _chunk_by_words(words: list[str], max_tokens: int = 800, overlap: int = 120) -> list[str]:
     """Fallback word-based chunking"""

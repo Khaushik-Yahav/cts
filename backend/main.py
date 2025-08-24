@@ -26,6 +26,7 @@ from backend.auth import (
     create_access_token,
     verify_doctor_credentials
 )
+from backend.otp_service import otp_service
 
 # Load environment variables
 load_dotenv()
@@ -34,7 +35,7 @@ load_dotenv()
 disable_swagger = os.getenv("DISABLE_SWAGGER_UI", "false").lower() == "true"
 app = FastAPI(
     title="Medical RAG Chatbot API",
-    description="RAG-powered medical chatbot with role-based authentication",
+    description="RAG-powered medical chatbot with role-based authentication and OTP verification",
     version="1.0.0",
     docs_url=None if disable_swagger else "/docs",
     redoc_url=None if disable_swagger else "/redoc",
@@ -92,6 +93,21 @@ class ProfessionalRegisterBody(BaseModel):
     password: str
     legal_no: str
     phone_number: str
+
+class ProfessionalOTPRequestBody(BaseModel):
+    email: EmailStr
+    password: str
+    legal_no: str
+    phone_number: str
+
+class OTPVerifyBody(BaseModel):
+    phone_number: str
+    email: EmailStr
+    otp_code: str
+
+class OTPResendBody(BaseModel):
+    phone_number: str
+    email: EmailStr
 
 class LoginBody(BaseModel):
     email: EmailStr
@@ -174,9 +190,11 @@ def register_general(body: GeneralRegisterBody):
             }
         }
 
-@app.post("/auth/register/professional")
-def register_professional(body: ProfessionalRegisterBody):
-    """Register a professional user (doctor) with verification"""
+# --- OTP Routes for Professional Registration ---
+@app.post("/auth/professional/request-otp")
+def request_professional_otp(body: ProfessionalOTPRequestBody):
+    """Request OTP for professional user registration"""
+    
     with db_session() as db:
         # Check if user already exists
         existing = db.execute(
@@ -197,13 +215,71 @@ def register_professional(body: ProfessionalRegisterBody):
                 detail="Could not verify your medical license. Please check your credentials or contact support."
             )
         
+        # Format phone number (ensure it starts with +)
+        phone_number = body.phone_number
+        if not phone_number.startswith('+'):
+            phone_number = '+91' + phone_number  # Assuming Indian numbers, adjust as needed
+        
+        # Prepare registration data to store temporarily
+        registration_data = {
+            "email": body.email,
+            "password_hash": hash_password(body.password),
+            "legal_no": body.legal_no,
+            "phone_number": phone_number,
+            "full_name": doctor_info["full_name"],
+            "role": "professional",
+            "doctor_info": doctor_info
+        }
+        
+        # Create OTP verification
+        result = otp_service.create_otp_verification(
+            phone_number=phone_number,
+            email=body.email,
+            registration_data=registration_data
+        )
+        
+        if result["success"]:
+            return {
+                "success": True,
+                "message": f"OTP sent to {phone_number}",
+                "phone_number": phone_number,
+                "email": body.email,
+                "expires_at": result["expires_at"]
+            }
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail=result["error"]
+            )
+
+@app.post("/auth/professional/verify-otp")
+def verify_professional_otp(body: OTPVerifyBody):
+    """Verify OTP and complete professional registration"""
+    
+    # Verify the OTP
+    result = otp_service.verify_otp(
+        phone_number=body.phone_number,
+        email=body.email,
+        otp_code=body.otp_code
+    )
+    
+    if not result["success"]:
+        raise HTTPException(
+            status_code=400,
+            detail=result["error"]
+        )
+    
+    # Get registration data
+    registration_data = result["registration_data"]
+    
+    with db_session() as db:
         # Create new professional user
         user = User(
-            email=body.email,
-            password_hash=hash_password(body.password),
-            full_name=doctor_info["full_name"],
-            legal_no=body.legal_no,
-            phone_number=body.phone_number,
+            email=registration_data["email"],
+            password_hash=registration_data["password_hash"],
+            full_name=registration_data["full_name"],
+            legal_no=registration_data["legal_no"],
+            phone_number=registration_data["phone_number"],
             role="professional",
             is_verified=True
         )
@@ -222,9 +298,30 @@ def register_professional(body: ProfessionalRegisterBody):
                 "role": user.role,
                 "full_name": user.full_name,
                 "legal_no": user.legal_no,
-                "specialization": doctor_info.get("specialization")
+                "specialization": registration_data["doctor_info"].get("specialization")
             }
         }
+
+@app.post("/auth/professional/resend-otp") 
+def resend_professional_otp(body: OTPResendBody):
+    """Resend OTP for professional registration"""
+    
+    result = otp_service.resend_otp(
+        phone_number=body.phone_number,
+        email=body.email
+    )
+    
+    if result["success"]:
+        return {
+            "success": True,
+            "message": result["message"],
+            "expires_at": result["expires_at"]
+        }
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail=result["error"]
+        )
 
 @app.post("/auth/login")
 def login(body: LoginBody):
@@ -528,6 +625,13 @@ def get_stats(user: AuthUser = Depends(get_current_user)):
             "uploaded_documents": upload_count or 0,
             "index_exists": index_exists("data/index"),
         }
+
+# --- Cleanup Route (Optional - for maintenance) ---
+@app.post("/admin/cleanup-otps")
+async def cleanup_expired_otps():
+    """Clean up expired OTP records (admin endpoint)"""
+    otp_service.cleanup_expired_otps()
+    return {"status": "cleanup completed"}
 
 if __name__ == "__main__":
     import uvicorn

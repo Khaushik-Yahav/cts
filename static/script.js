@@ -3,6 +3,8 @@ let currentUser = null;
 let authToken = null;
 let currentSessionId = null;
 let sessions = [];
+let otpData = null; // Store OTP verification data
+let otpTimer = null; // OTP countdown timer
 
 // Initialize app
 document.addEventListener('DOMContentLoaded', function() {
@@ -44,7 +46,6 @@ function showChatInterface() {
     
     // Show appropriate UI based on user role
     updateUIForUserRole();
-    
     loadSessions();
     checkIndexStatus();
     console.log('💬 Showing chat interface for:', currentUser.email, 'Role:', currentUser.role);
@@ -89,11 +90,29 @@ function showProfessionalRegister() {
     document.getElementById('professional-register-form').style.display = 'block';
 }
 
+function showOTPVerification() {
+    hideAllForms();
+    document.getElementById('otp-verification-form').style.display = 'block';
+    
+    // Display phone number
+    if (otpData && otpData.phone_number) {
+        document.getElementById('otpPhoneDisplay').textContent = otpData.phone_number;
+    }
+    
+    // Start countdown timer
+    startOTPTimer();
+    
+    // Clear OTP input and focus
+    document.getElementById('otpCode').value = '';
+    document.getElementById('otpCode').focus();
+}
+
 function hideAllForms() {
     document.getElementById('role-selection').style.display = 'none';
     document.getElementById('login-form').style.display = 'none';
     document.getElementById('general-register-form').style.display = 'none';
     document.getElementById('professional-register-form').style.display = 'none';
+    document.getElementById('otp-verification-form').style.display = 'none';
 }
 
 function logout() {
@@ -103,6 +122,8 @@ function logout() {
     currentUser = null;
     currentSessionId = null;
     sessions = [];
+    otpData = null;
+    clearOTPTimer();
     showAuthInterface();
     showToast('👋 Logged out successfully!', 'success');
 }
@@ -138,11 +159,20 @@ function setupEventListeners() {
         e.preventDefault();
         showLogin();
     });
+    document.getElementById('backToProfessionalRegister').addEventListener('click', (e) => {
+        e.preventDefault();
+        clearOTPTimer();
+        showProfessionalRegister();
+    });
     
     // Auth forms
     document.getElementById('loginForm').addEventListener('submit', handleLogin);
     document.getElementById('generalRegisterForm').addEventListener('submit', handleGeneralRegister);
     document.getElementById('professionalRegisterForm').addEventListener('submit', handleProfessionalRegister);
+    document.getElementById('otpVerificationForm').addEventListener('submit', handleOTPVerification);
+    
+    // OTP buttons
+    document.getElementById('resendOtpBtn').addEventListener('click', handleResendOTP);
     
     // Chat interface buttons
     document.getElementById('logoutBtn').addEventListener('click', logout);
@@ -168,10 +198,56 @@ function setupEventListeners() {
             showToast('⚠️ Only medical professionals can upload files', 'error');
         }
     });
+    
     uploadArea.addEventListener('dragover', handleDragOver);
     uploadArea.addEventListener('dragleave', handleDragLeave);
     uploadArea.addEventListener('drop', handleFileDrop);
     fileInput.addEventListener('change', handleFileSelect);
+    
+    // OTP input formatting
+    document.getElementById('otpCode').addEventListener('input', handleOTPInput);
+}
+
+// OTP functions
+function startOTPTimer() {
+    let timeLeft = 300; // 5 minutes in seconds
+    const timerElement = document.getElementById('otpTimer');
+    
+    clearOTPTimer(); // Clear any existing timer
+    
+    otpTimer = setInterval(() => {
+        const minutes = Math.floor(timeLeft / 60);
+        const seconds = timeLeft % 60;
+        timerElement.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+        
+        if (timeLeft <= 0) {
+            clearOTPTimer();
+            timerElement.textContent = 'Expired';
+            document.getElementById('verifyOtpBtn').disabled = true;
+            showToast('⏰ OTP has expired. Please request a new one.', 'error');
+        }
+        
+        timeLeft--;
+    }, 1000);
+}
+
+function clearOTPTimer() {
+    if (otpTimer) {
+        clearInterval(otpTimer);
+        otpTimer = null;
+    }
+}
+
+function handleOTPInput(e) {
+    // Only allow digits and limit to 6 characters
+    let value = e.target.value.replace(/\D/g, '');
+    if (value.length > 6) {
+        value = value.substring(0, 6);
+    }
+    e.target.value = value;
+    
+    // Enable/disable verify button
+    document.getElementById('verifyOtpBtn').disabled = value.length !== 6;
 }
 
 // Auth handlers
@@ -223,10 +299,10 @@ async function handleGeneralRegister(e) {
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ 
-                email, 
-                password, 
-                full_name: fullName 
+            body: JSON.stringify({
+                email,
+                password,
+                full_name: fullName
             }),
         });
         
@@ -255,16 +331,16 @@ async function handleProfessionalRegister(e) {
     const email = document.getElementById('professionalEmail').value;
     const password = document.getElementById('professionalPassword').value;
     
-    console.log('👨‍⚕️ Attempting professional registration for:', email);
+    console.log('👨‍⚕️ Requesting OTP for professional registration:', email);
     
     try {
-        const response = await fetch('/auth/register/professional', {
+        const response = await fetch('/auth/professional/request-otp', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ 
-                email, 
+            body: JSON.stringify({
+                email,
                 password,
                 legal_no: legalNo,
                 phone_number: phoneNumber
@@ -274,18 +350,105 @@ async function handleProfessionalRegister(e) {
         const data = await response.json();
         
         if (response.ok) {
-            authToken = data.access_token;
-            currentUser = data.user;
-            localStorage.setItem('authToken', authToken);
-            localStorage.setItem('currentUser', JSON.stringify(currentUser));
-            showChatInterface();
-            showToast(`🎉 Welcome Dr. ${currentUser.full_name}! Your medical license has been verified.`, 'success');
+            otpData = {
+                phone_number: data.phone_number,
+                email: data.email
+            };
+            showOTPVerification();
+            showToast(`📱 ${data.message}`, 'success');
         } else {
             showToast('❌ ' + (data.detail || 'Professional registration failed'), 'error');
         }
     } catch (error) {
         console.error('Professional registration error:', error);
         showToast('🌐 Network error during registration', 'error');
+    }
+}
+
+async function handleOTPVerification(e) {
+    e.preventDefault();
+    const otpCode = document.getElementById('otpCode').value;
+    
+    if (!otpData) {
+        showToast('❌ OTP verification data not found', 'error');
+        return;
+    }
+    
+    console.log('🔐 Verifying OTP for:', otpData.phone_number);
+    
+    try {
+        const response = await fetch('/auth/professional/verify-otp', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                phone_number: otpData.phone_number,
+                email: otpData.email,
+                otp_code: otpCode
+            }),
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok) {
+            clearOTPTimer();
+            authToken = data.access_token;
+            currentUser = data.user;
+            localStorage.setItem('authToken', authToken);
+            localStorage.setItem('currentUser', JSON.stringify(currentUser));
+            showChatInterface();
+            showToast(`🎉 Welcome Dr. ${currentUser.full_name}! Your account has been verified.`, 'success');
+        } else {
+            showToast('❌ ' + (data.detail || 'OTP verification failed'), 'error');
+        }
+    } catch (error) {
+        console.error('OTP verification error:', error);
+        showToast('🌐 Network error during OTP verification', 'error');
+    }
+}
+
+async function handleResendOTP() {
+    if (!otpData) {
+        showToast('❌ OTP data not found', 'error');
+        return;
+    }
+    
+    const resendBtn = document.getElementById('resendOtpBtn');
+    resendBtn.disabled = true;
+    resendBtn.textContent = 'Sending...';
+    
+    try {
+        const response = await fetch('/auth/professional/resend-otp', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                phone_number: otpData.phone_number,
+                email: otpData.email
+            }),
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok) {
+            startOTPTimer(); // Restart timer
+            document.getElementById('verifyOtpBtn').disabled = false;
+            document.getElementById('otpCode').value = '';
+            showToast('📱 New OTP sent successfully!', 'success');
+        } else {
+            showToast('❌ ' + (data.detail || 'Failed to resend OTP'), 'error');
+        }
+    } catch (error) {
+        console.error('Resend OTP error:', error);
+        showToast('🌐 Network error during OTP resend', 'error');
+    } finally {
+        // Re-enable button after 30 seconds
+        setTimeout(() => {
+            resendBtn.disabled = false;
+            resendBtn.textContent = 'Resend OTP';
+        }, 30000);
     }
 }
 
@@ -311,8 +474,8 @@ async function sendMessage() {
     const questionInput = document.getElementById('questionInput');
     const sendBtn = document.getElementById('sendBtn');
     const messagesContainer = document.getElementById('messagesContainer');
-    
     const question = questionInput.value.trim();
+    
     if (!question || !authToken) return;
     
     console.log('💬 Sending message:', question);
@@ -384,7 +547,6 @@ function addMessage(role, content, citations = null) {
     const contentDiv = document.createElement('div');
     contentDiv.className = 'message-content';
     contentDiv.textContent = content;
-    
     messageDiv.appendChild(contentDiv);
     
     // Add citations if available
@@ -428,10 +590,8 @@ function addTypingIndicator() {
             <span></span>
         </div>
     `;
-    
     messagesContainer.appendChild(typingDiv);
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
-    
     return typingDiv;
 }
 
@@ -492,7 +652,9 @@ async function createNewSession() {
                 'Content-Type': 'application/json',
                 'Authorization': `Bearer ${authToken}`,
             },
-            body: JSON.stringify({ title: 'New chat' }),
+            body: JSON.stringify({
+                title: 'New chat'
+            }),
         });
         
         if (response.ok) {
@@ -504,6 +666,7 @@ async function createNewSession() {
             
             // Reload sessions
             loadSessions();
+            
             showToast('✅ New session created!', 'success');
         }
     } catch (error) {
@@ -548,7 +711,7 @@ function clearMessages() {
     const welcomeMessage = currentUser && currentUser.role === 'professional' 
         ? 'Upload PDF documents and ask questions about medical information.'
         : 'Ask questions about medical information from documents uploaded by medical professionals.';
-        
+    
     messagesContainer.innerHTML = `
         <div class="welcome-message">
             <h2>🤖 Welcome to Medical RAG Chatbot</h2>
@@ -602,7 +765,6 @@ async function uploadFiles(files) {
     }
     
     const pdfFiles = files.filter(file => file.type === 'application/pdf');
-    
     if (pdfFiles.length === 0) {
         showToast('❌ Please select PDF files only', 'error');
         return;
@@ -657,8 +819,8 @@ async function checkIndexStatus() {
     try {
         const response = await fetch('/health');
         const data = await response.json();
-        
         const indexStatus = document.getElementById('indexStatus');
+        
         if (data.index_exists) {
             indexStatus.textContent = '📚 Knowledge base ready';
             indexStatus.className = 'index-ready';
@@ -667,7 +829,7 @@ async function checkIndexStatus() {
             sendBtn.disabled = !questionInput.value.trim();
         } else {
             const statusText = currentUser && currentUser.role === 'professional' 
-                ? '⚠️ No documents uploaded yet'
+                ? '⚠️ No documents uploaded yet' 
                 : '⚠️ Waiting for medical professionals to upload documents';
             indexStatus.textContent = statusText;
             indexStatus.className = 'index-missing';
