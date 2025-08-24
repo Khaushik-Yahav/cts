@@ -3,11 +3,11 @@ from __future__ import annotations
 import os
 import time
 import re
-from typing import Literal, Optional
+from typing import Literal, Optional, List
 
 Provider = Literal["groq", "gemini", "openai", "auto"]
 
-# Much better system prompt - not overly restrictive
+
 SYSTEM_BASE = (
     "You are a helpful medical information assistant. "
     "Provide accurate, evidence-based responses using the context provided. "
@@ -17,7 +17,21 @@ SYSTEM_BASE = (
     "If information isn't in the context, acknowledge this and provide general medical guidance when appropriate."
 )
 
-# Greeting responses
+
+QUERY_REWRITING_PROMPT = (
+    "You are a medical query rewriting assistant. Given a medical question, generate 3-4 alternative "
+    "ways to ask the same question that might retrieve different but relevant information. "
+    "Focus on:\n"
+    "- Using medical synonyms and terminology\n"
+    "- Different phrasings (symptoms vs conditions vs treatments)\n"
+    "- Varying specificity levels\n"
+    "- Clinical vs patient language\n\n"
+    "Return ONLY the alternative questions, one per line, without numbering or explanations.\n\n"
+    "Original question: {question}\n\n"
+    "Alternative questions:"
+)
+
+
 GREETING_RESPONSES = {
     "hi": "Hello! I'm your medical information assistant. You can ask me questions about medications, treatments, clinical studies, or any other medical topics. How can I help you today?",
     "hello": "Hello! I'm here to help with medical information and questions. What would you like to know about?",
@@ -136,6 +150,50 @@ def generate_answer(
             print(f"OpenAI failed: {e}")
 
     return "[No LLM providers available or all failed]"
+
+def generate_query_paraphrases(
+    original_query: str,
+    provider: Provider = "auto",
+    model_override: Optional[str] = None,
+) -> List[str]:
+    """
+    Generate paraphrases of the original query for multi-query retrieval
+    """
+    prompt = QUERY_REWRITING_PROMPT.format(question=original_query)
+    
+    try:
+        response = generate_answer(
+            prompt,
+            provider=provider,
+            model_override=model_override,
+            temperature=0.7,  # Higher temperature for more diverse paraphrases
+            max_tokens=200,
+        )
+        
+        if response.startswith("[No LLM providers"):
+            print("⚠️ No LLM available for query rewriting, using original query only")
+            return [original_query]
+        
+        # Parse the response into individual questions
+        paraphrases = []
+        lines = response.strip().split('\n')
+        
+        for line in lines:
+            line = line.strip()
+            # Remove numbering, bullets, or dashes
+            line = re.sub(r'^[\d\.\-\*\•]\s*', '', line)
+            if line and len(line) > 10:  # Only add substantial questions
+                paraphrases.append(line)
+        
+        # Always include the original query
+        all_queries = [original_query] + paraphrases
+        
+        # Limit to 5 total queries to avoid overwhelming the system
+        return all_queries[:5]
+        
+    except Exception as e:
+        print(f"Query rewriting failed: {e}")
+        return [original_query]
 
 def summarize_history(text: str, provider: Provider = "auto", max_tokens: int = 200) -> str:
     """

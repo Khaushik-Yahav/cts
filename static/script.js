@@ -6,6 +6,32 @@ let sessions = [];
 let otpData = null; // Store OTP verification data
 let otpTimer = null; // OTP countdown timer
 
+// API wrapper with automatic logout on 401
+async function apiFetch(input, init) {
+    if (!init) init = {};
+    if (!init.headers) init.headers = {};
+
+    const token = localStorage.getItem('authToken');
+    if (token) {
+        init.headers['Authorization'] = `Bearer ${token}`;
+    }
+
+    const response = await fetch(input, init);
+
+    if (response.status === 401) {
+        handleUnauthorized();
+        return response;
+    }
+
+    return response;
+}
+
+function handleUnauthorized() {
+    console.log('🔒 Session expired or unauthorized - logging out');
+    logout();
+    showToast('⏰ Your session has expired. Please log in again.', 'error');
+}
+
 // Initialize app
 document.addEventListener('DOMContentLoaded', function() {
     checkAuthStatus();
@@ -250,7 +276,7 @@ function handleOTPInput(e) {
     document.getElementById('verifyOtpBtn').disabled = value.length !== 6;
 }
 
-// Auth handlers
+// Auth handlers - UPDATED to use apiFetch
 async function handleLogin(e) {
     e.preventDefault();
     const email = document.getElementById('loginEmail').value;
@@ -259,7 +285,7 @@ async function handleLogin(e) {
     console.log('🔐 Attempting login for:', email);
     
     try {
-        const response = await fetch('/auth/login', {
+        const response = await apiFetch('/auth/login', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -294,7 +320,7 @@ async function handleGeneralRegister(e) {
     console.log('📝 Attempting general registration for:', email);
     
     try {
-        const response = await fetch('/auth/register/general', {
+        const response = await apiFetch('/auth/register/general', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -334,7 +360,7 @@ async function handleProfessionalRegister(e) {
     console.log('👨‍⚕️ Requesting OTP for professional registration:', email);
     
     try {
-        const response = await fetch('/auth/professional/request-otp', {
+        const response = await apiFetch('/auth/professional/request-otp', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -377,7 +403,7 @@ async function handleOTPVerification(e) {
     console.log('🔐 Verifying OTP for:', otpData.phone_number);
     
     try {
-        const response = await fetch('/auth/professional/verify-otp', {
+        const response = await apiFetch('/auth/professional/verify-otp', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -419,7 +445,7 @@ async function handleResendOTP() {
     resendBtn.textContent = 'Sending...';
     
     try {
-        const response = await fetch('/auth/professional/resend-otp', {
+        const response = await apiFetch('/auth/professional/resend-otp', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -491,11 +517,10 @@ async function sendMessage() {
     const typingElement = addTypingIndicator();
     
     try {
-        const response = await fetch('/ask', {
+        const response = await apiFetch('/ask', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${authToken}`,
             },
             body: JSON.stringify({
                 question: question,
@@ -601,14 +626,10 @@ function removeTypingIndicator(element) {
     }
 }
 
-// Session management
+// Session management - UPDATED to use apiFetch
 async function loadSessions() {
     try {
-        const response = await fetch('/sessions', {
-            headers: {
-                'Authorization': `Bearer ${authToken}`,
-            },
-        });
+        const response = await apiFetch('/sessions');
         
         if (response.ok) {
             sessions = await response.json();
@@ -646,11 +667,10 @@ async function createNewSession() {
     console.log('➕ Creating new session');
     
     try {
-        const response = await fetch('/sessions', {
+        const response = await apiFetch('/sessions', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Authorization': `Bearer ${authToken}`,
             },
             body: JSON.stringify({
                 title: 'New chat'
@@ -679,11 +699,7 @@ async function loadSession(sessionId) {
     console.log('📂 Loading session:', sessionId);
     
     try {
-        const response = await fetch(`/sessions/${sessionId}`, {
-            headers: {
-                'Authorization': `Bearer ${authToken}`,
-            },
-        });
+        const response = await apiFetch(`/sessions/${sessionId}`);
         
         if (response.ok) {
             const sessionData = await response.json();
@@ -784,11 +800,8 @@ async function uploadFiles(files) {
             const formData = new FormData();
             formData.append('file', file);
             
-            const response = await fetch('/upload', {
+            const response = await apiFetch('/upload', {
                 method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${authToken}`,
-                },
                 body: formData,
             });
             
@@ -817,7 +830,7 @@ async function uploadFiles(files) {
 
 async function checkIndexStatus() {
     try {
-        const response = await fetch('/health');
+        const response = await apiFetch('/health');
         const data = await response.json();
         const indexStatus = document.getElementById('indexStatus');
         

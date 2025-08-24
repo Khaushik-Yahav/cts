@@ -15,7 +15,7 @@ from backend.models import ChatSession, Message
 MAX_MESSAGES_PER_SESSION = int(os.getenv("MAX_MESSAGES_PER_SESSION", "12"))
 MAX_QA_PAIRS_IN_PROMPT = 6  # How many recent Q&A pairs to include in prompt
 
-# Prompt: instructs LLM NOT to include citations in the answer text
+# Enhanced prompt template
 PROMPT_TEMPLATE = """You are a medical information assistant. Answer the user's question using the provided medical documents.
 
 INSTRUCTIONS:
@@ -24,6 +24,7 @@ INSTRUCTIONS:
 - For complex medical topics, provide detailed explanations in multiple bulletpoints.
 - Do NOT include source citations, filenames or page numbers IN the main response. Just provide the answer in clear language.
 - Citations will be shown separately to the user.
+- The documents have been carefully selected for relevance and diversity to provide comprehensive coverage.
 
 If the context doesn't contain relevant information, say "I don't have specific information about this in the current knowledge base" and provide general medical guidance if appropriate.
 
@@ -33,7 +34,7 @@ ROLLING SUMMARY (earlier conversation):
 RECENT CONVERSATION:
 {recent_history}
 
-DOCUMENT CONTEXT (medical sources):
+DOCUMENT CONTEXT (medical sources - selected for relevance and diversity):
 {context}
 
 USER QUESTION: {question}
@@ -44,34 +45,46 @@ def _format_context(chunks: List[Dict]) -> str:
     """Format retrieved chunks for better LLM understanding"""
     if not chunks:
         return "No relevant documents found."
+    
     parts = []
     for i, c in enumerate(chunks, 1):
-        header = f"--- SOURCE {i}: {c['source']} (Page {c['page']}) | Relevance Score: {c['score']:.2f} ---"
+        # Enhanced formatting showing retrieval quality
+        score_info = f"Score: {c.get('final_score', c.get('score', 0)):.2f}"
+        if 'frequency' in c:
+            score_info += f" | Retrieved by {c['frequency']} query variants"
+        
+        header = f"--- SOURCE {i}: {c['source']} (Page {c['page']}) | {score_info} ---"
         content = c["text"].strip()
         parts.append(f"{header}\n{content}")
+    
     return "\n\n".join(parts)
 
 def _format_history(pairs: List[Dict]) -> str:
     """Format Q&A pairs for conversation context"""
     if not pairs:
         return "No previous conversation."
+    
     formatted = []
     for i, p in enumerate(pairs, 1):
         formatted.append(f"Q{i}: {p['q']}\nA{i}: {p['a']}")
+    
     return "\n\n".join(formatted)
 
 def _get_last_n_qa_pairs(db, session_id: int, n_pairs: int) -> List[Dict]:
     """Get the last N Q&A pairs from a session"""
     stmt = select(Message).where(Message.session_id == session_id).order_by(Message.created_at.asc())
     messages = list(db.execute(stmt).scalars())
+    
     pairs: List[Dict] = []
     cur_q = None
+    
     for m in messages:
         if m.role == "user":
             cur_q = m.content
         elif m.role == "assistant" and cur_q is not None:
             pairs.append({"q": cur_q, "a": m.content})
             cur_q = None
+    
     return pairs[-n_pairs:]
 
 def _count_messages_in_session(db, session_id: int) -> int:
@@ -82,20 +95,24 @@ def _count_messages_in_session(db, session_id: int) -> int:
 def _maybe_update_summary(db, sess: ChatSession, provider: Provider):
     """Update session summary if we have too many messages"""
     pairs_all = _get_last_n_qa_pairs(db, sess.id, 10_000)  # Get all pairs
+    
     if len(pairs_all) <= MAX_QA_PAIRS_IN_PROMPT:
         return
+    
     older = pairs_all[:-MAX_QA_PAIRS_IN_PROMPT]
     if not older:
         return
+    
     older_text = _format_history(older)
     rolled = summarize_history(older_text, provider=provider)
+    
     if sess.summary:
         sess.summary = (sess.summary + "\n\n" + rolled).strip()
     else:
         sess.summary = rolled
 
 def remove_citations_from_answer(text):
-    # Remove [CITATIONS: ...] (in case LLM puts them anyway)
+    """Remove [CITATIONS: ...] (in case LLM puts them anyway)"""
     return re.sub(r'\[CITATIONS:[^\]]*\]', '', text).replace('[]', '').strip()
 
 def answer_question(
@@ -105,9 +122,10 @@ def answer_question(
     index_dir: str,
     provider: Provider = "auto",
     model_override: Optional[str] = None,
+    use_enhanced_retrieval: bool = True,
 ) -> Tuple[str, List[Dict], int, bool]:
     """
-    Answer a question using RAG.
+    Answer a question using enhanced RAG with MMR and multi-query retrieval.
     Returns: (answer, citations, session_id, session_limit_reached)
     """
     with db_session() as db:
@@ -142,13 +160,24 @@ def answer_question(
         db.add(user_msg); db.flush()
 
         try:
-            # Document retrieval
-            hits = retrieve(question, index_dir=index_dir, top_k=top_k)
+            # Enhanced document retrieval with MMR and multi-query
+            print(f"🔍 Starting enhanced retrieval for: {question[:80]}...")
+            
+            hits = retrieve(
+                query=question,
+                index_dir=index_dir,
+                top_k=top_k,
+                use_mmr=use_enhanced_retrieval,
+                use_multi_query=use_enhanced_retrieval
+            )
+            
+            print(f"📚 Retrieved {len(hits)} documents for context")
 
             # Build full chat prompt
             pairs_recent = _get_last_n_qa_pairs(db, sess.id, MAX_QA_PAIRS_IN_PROMPT)
             recent_history = _format_history(pairs_recent)
             context = _format_context(hits)
+            
             prompt = PROMPT_TEMPLATE.format(
                 rolling_summary=sess.summary or "No previous summary.",
                 recent_history=recent_history,
@@ -166,22 +195,30 @@ def answer_question(
             # Remove any [CITATIONS: ...] in the answer (just in case)
             answer = remove_citations_from_answer(answer)
 
-            # Citations only shown below answer, not in answer text
-            citations = [
-                {
+            # Enhanced citations with retrieval metadata
+            citations = []
+            for h in hits:
+                citation = {
                     "source": h["source"], 
                     "page": h["page"], 
-                    "score": h["score"], 
-                    "rank": h["rank"]
-                } 
-                for h in hits
-            ]
+                    "score": h.get('final_score', h.get('score', 0)),
+                    "rank": h.get("rank", len(citations) + 1)
+                }
+                
+                # Add enhanced metadata if available
+                if 'frequency' in h:
+                    citation['frequency'] = h['frequency']
+                if 'avg_score' in h:
+                    citation['avg_score'] = h['avg_score']
+                
+                citations.append(citation)
 
         except Exception as e:
+            print(f"❌ Enhanced retrieval failed: {e}")
             answer = f"I apologize, but I encountered an error while processing your question: {str(e)}"
             citations = []
 
-        # Store assistant message
+        # Store assistant message with enhanced citations
         asst_msg = Message(
             session_id=sess.id, 
             role="assistant", 
