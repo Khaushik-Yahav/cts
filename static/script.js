@@ -243,6 +243,12 @@ function setupEventListeners() {
     // OTP input formatting
     document.getElementById('otpCode').addEventListener('input', handleOTPInput);
     
+    // Voice recognition button
+    const micBtn = document.getElementById('micBtn'); 
+    if (micBtn) {
+        micBtn.addEventListener('click', startVoiceRecognition);
+    }
+    
     // Click outside modal to close
     window.addEventListener('click', function(event) {
         const modal = document.getElementById('fileQueueModal');
@@ -250,6 +256,47 @@ function setupEventListeners() {
             closeFileQueueModal();
         }
     });
+}
+
+// Voice Recognition Function - FIXED
+function startVoiceRecognition() {
+    if (!('webkitSpeechRecognition' in window)) {
+        showToast('⚠️ Voice recognition not supported in this browser.', 'error');
+        return;
+    }
+
+    const recognition = new webkitSpeechRecognition();
+    const micBtn = document.getElementById('micBtn');
+    const questionInput = document.getElementById('questionInput');
+    
+    recognition.lang = "en-US";
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+
+    // Add recording visual feedback
+    micBtn.classList.add('recording');
+    showToast('🎙️ Listening...', 'info');
+
+    recognition.start();
+
+    recognition.onresult = function(event) {
+        const transcript = event.results[0][0].transcript;
+        questionInput.value = transcript;
+        questionInput.dispatchEvent(new Event('input')); 
+        // FIXED: Only show "Voice captured" without the transcript text
+        showToast('✅ Voice captured', 'success');
+    };
+
+    recognition.onerror = function(event) {
+        console.error('Voice recognition error:', event.error);
+        showToast('⚠️ Voice recognition error: ' + event.error, 'error');
+        micBtn.classList.remove('recording');
+    };
+
+    recognition.onend = function() {
+        console.log("Voice recognition ended.");
+        micBtn.classList.remove('recording');
+    };
 }
 
 // File validation and utilities
@@ -745,7 +792,7 @@ function addMessage(role, content, citations = null) {
         citationsDiv.className = 'citations';
         
         const citationsTitle = document.createElement('h4');
-        citationsTitle.textContent = '📚 Sources:';  // CLEANED: Removed "Method B OCR" reference
+        citationsTitle.textContent = '📚 Sources:';
         citationsDiv.appendChild(citationsTitle);
         
         citations.forEach((citation, index) => {
@@ -823,7 +870,7 @@ function renderSessions() {
     sessionsList.innerHTML = '';
     
     if (sessions.length === 0) {
-        sessionsList.innerHTML = '<div style="text-align: center; color: #718096; padding: 1rem;">No sessions yet</div>';
+        sessionsList.innerHTML = '<div style="text-align: center; color: #626871; padding: 1rem;">No sessions yet</div>';
         return;
     }
     
@@ -966,7 +1013,7 @@ async function uploadFiles(files) {
     const uploadStatus = document.getElementById('uploadStatus');
     const uploadArea = document.getElementById('uploadArea');
     
-    uploadStatus.innerHTML = '<div class="upload-info">📤 Processing files...</div>';  // CLEANED: Removed "Method B OCR" reference
+    uploadStatus.innerHTML = '<div class="upload-info">📤 Processing files...</div>';
     uploadArea.classList.add('loading');
     
     try {
@@ -983,8 +1030,8 @@ async function uploadFiles(files) {
             const data = await response.json();
             
             if (response.ok) {
-                uploadStatus.innerHTML = `<div class="upload-success">✅ ${files[0].name} processed successfully!</div>`;  // CLEANED: Removed "Method B OCR" reference
-                showToast(`🎉 File uploaded and processed!`, 'success');  // CLEANED: Removed "Method B OCR" reference
+                uploadStatus.innerHTML = `<div class="upload-success">✅ ${files[0].name} processed successfully!</div>`;
+                showToast(`🎉 File uploaded and processed!`, 'success');
             } else {
                 uploadStatus.innerHTML = `<div class="upload-error">❌ ${data.detail || 'Failed to upload'}</div>`;
                 showToast('❌ Upload failed: ' + (data.detail || 'Unknown error'), 'error');
@@ -1014,7 +1061,7 @@ async function uploadFiles(files) {
                     </div>
                 `;
                 
-                showToast(`🎉 ${successCount} file(s) processed successfully!`, 'success');  // CLEANED: Removed "Method B OCR" reference
+                showToast(`🎉 ${successCount} file(s) processed successfully!`, 'success');
                 
                 if (failCount > 0) {
                     console.log('Failed files:', data.failed_files);
@@ -1056,7 +1103,7 @@ async function checkIndexStatus() {
         const indexStatus = document.getElementById('indexStatus');
         
         if (data.index_exists) {
-            indexStatus.textContent = '🔍 Knowledge base ready';  // CLEANED: Removed "Method B OCR" reference
+            indexStatus.textContent = '🔍 Knowledge base ready';
             indexStatus.className = 'index-status index-ready';
             const questionInput = document.getElementById('questionInput');
             const sendBtn = document.getElementById('sendBtn');
