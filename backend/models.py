@@ -1,4 +1,3 @@
-# backend/models.py
 from __future__ import annotations
 from datetime import datetime
 from sqlalchemy import Column, Integer, String, DateTime, Text, ForeignKey, Boolean

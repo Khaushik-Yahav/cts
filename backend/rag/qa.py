@@ -1,4 +1,3 @@
-# backend/rag/qa.py
 from __future__ import annotations
 import re
 import os
