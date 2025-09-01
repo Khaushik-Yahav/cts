@@ -1,4 +1,3 @@
-# backend/rag/llm.py
 from __future__ import annotations
 
 import os
@@ -44,18 +43,57 @@ GREETING_RESPONSES = {
 }
 
 # -----------------------------
-# Simple helpers (greetings)
+# FIXED: Better greeting detection
 # -----------------------------
 
 def is_greeting_or_casual(text: str) -> bool:
-    """Check if the input is a greeting or casual interaction."""
+    """Check if the input is a greeting or casual interaction with better pattern matching."""
+    if not text or len(text.strip()) <= 2:
+        return True
+    
     text = text.lower().strip()
-    casual_patterns = [
-        "hi", "hello", "hey", "good morning", "good afternoon", "good evening",
-        "how are you", "what's up", "sup", "greetings", "thank you", "thanks",
-        "bye", "goodbye", "see you", "ok", "okay", "alright",
+    
+    # Exact match patterns (standalone greetings)
+    exact_patterns = [
+        r"^hi$", r"^hello$", r"^hey$", r"^sup$", 
+        r"^good morning$", r"^good afternoon$", r"^good evening$",
+        r"^thank you$", r"^thanks$", r"^thx$",
+        r"^bye$", r"^goodbye$", r"^see you$",
+        r"^ok$", r"^okay$", r"^alright$", r"^fine$"
     ]
-    return any(pattern in text for pattern in casual_patterns) or len(text.strip()) <= 3
+    
+    # Check exact patterns
+    for pattern in exact_patterns:
+        if re.match(pattern, text):
+            return True
+    
+    # Specific greeting phrase patterns (with word boundaries)
+    phrase_patterns = [
+        r"\bhow are you\b",
+        r"\bwhat's up\b",
+        r"\bhow's it going\b",
+        r"\bhow do you do\b"
+    ]
+    
+    for pattern in phrase_patterns:
+        if re.search(pattern, text):
+            return True
+    
+    # If the text is very short and doesn't contain medical terms, treat as casual
+    medical_keywords = [
+        "drug", "medication", "treatment", "dose", "dosage", "side effects",
+        "symptoms", "condition", "disease", "therapy", "clinical", "patient",
+        "supplied", "storage", "handling", "injection", "tablet", "capsule",
+        "mg", "ml", "prescription", "contraindication", "indication"
+    ]
+    
+    if len(text.split()) <= 3:
+        # If it's 3 words or less, check if it contains medical terms
+        has_medical_terms = any(keyword in text for keyword in medical_keywords)
+        if not has_medical_terms:
+            return True
+    
+    return False
 
 
 def handle_greeting_or_casual(text: str) -> str:
@@ -68,7 +106,7 @@ def handle_greeting_or_casual(text: str) -> str:
 
 
 # -----------------------------
-# Core LLM interaction
+# Core LLM interaction (rest remains the same)
 # -----------------------------
 
 def generate_answer(
@@ -154,7 +192,7 @@ def generate_answer(
 
 
 # -----------------------------
-# Advanced helpers
+# Advanced helpers (rest remains the same)
 # -----------------------------
 
 def generate_query_paraphrases(

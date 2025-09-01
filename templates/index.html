@@ -146,9 +146,8 @@
                             <h3>👤 General User</h3>
                             <p>You can ask questions about medical information. Only medical professionals can upload documents.</p>
                             <div class="feature-list">
-                                <div class="feature-item">✅ Ask medical questions</div>
-                                <div class="feature-item">✅ View document citations</div>
-                                <div class="feature-item">❌ Upload files</div>
+                                <div class="feature-item">Ask medical questions</div>
+                                <div class="feature-item">View document citations</div>
                             </div>
                             <div class="upgrade-prompt">
                                 <p>Are you a medical professional?</p>
@@ -160,7 +159,7 @@
                     <!-- Sessions List -->
                     <div class="sessions-section">
                         <div class="sessions-header">
-                            <h3>💬 Chat Sessions</h3>
+                            <h3>Chat Sessions</h3>
                             <button id="newSessionBtn">+ New</button>
                         </div>
                         <div id="sessionsList" class="sessions-list">
@@ -173,7 +172,7 @@
                 <div class="chat-area">
                     <div id="messagesContainer" class="messages-container">
                         <div class="welcome-message">
-                            <h2>🤖 Welcome to CuraAI</h2>
+                            <h2>Welcome to CuraAI</h2>
                             <p id="welcomeText">Ask questions about medical information from uploaded documents.</p>
                         </div>
                     </div>
@@ -182,11 +181,18 @@
                     <div class="input-area">
                         <div class="input-container">
                             <textarea id="questionInput" placeholder="Ask a medical question..." rows="1"></textarea>
+                            <button id="micBtn" class="mic-button" title="Voice Input">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="white" viewBox="0 0 24 24">
+                                    <path d="M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 14 0h-2z"/>
+                                    <path d="M19 11h-2a5 5 0 0 1-10 0H5a7 7 0 0 0 14 0z"/>
+                                </svg>
+                            </button>
                             <button id="sendBtn" disabled>
-                                <span class="send-icon">🚀</span>
+                                <span class="send-icon"></span>
                                 <span class="send-text">Send</span>
                             </button>
                         </div>
+                        <p id="speechStatus" class="speech-status"></p>
                         <div class="input-info">
                             <span id="sessionInfo"></span>
                             <span id="indexStatus" class="index-status">Upload files to get started</span>

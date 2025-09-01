@@ -149,7 +149,7 @@ class DocumentProcessor:
             return None
             
         chunk = {
-            'text': text.strip(),  # Changed from 'content' to 'text' to match retrieve.py
+            'text': text.strip(),  
             'source': source,
             'page': page
         }
